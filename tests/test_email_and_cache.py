@@ -1,5 +1,5 @@
 """
-tests/test_email_and_cache.py - Tests for cache purging and 15-tag email configuration parser.
+tests/test_email_and_cache.py - Tests for cache purging and redesigned rich email templates.
 """
 
 import os
@@ -8,7 +8,11 @@ import unittest
 from pathlib import Path
 
 from cache_cleaner import purge_stale_cache
-from email_service import parse_run_config_tags, get_default_questionnaire_template
+from email_service import (
+    parse_run_config_tags,
+    get_morning_questionnaire_template,
+    email_dispatcher
+)
 
 
 class TestCacheCleaner(unittest.TestCase):
@@ -44,51 +48,56 @@ class TestCacheCleaner(unittest.TestCase):
 
 
 class TestEmailConfigParser(unittest.TestCase):
-    def test_parse_valid_default_template(self):
-        template = get_default_questionnaire_template("Test_Morning_Run")
+    def test_parse_rich_morning_questionnaire_template(self):
+        """Verifies parsing of the rich Section 2 morning template with colons and emojis."""
+        template = get_morning_questionnaire_template("2026-10-28")
         config, errors = parse_run_config_tags(template)
 
         self.assertEqual(errors, [])
         self.assertIsNotNone(config)
-        self.assertEqual(config["run_name"], "Test_Morning_Run")
+        self.assertEqual(config["run_name"], "Run_2026-10-28_01")
         self.assertEqual(config["run_type"], "Automated")
-        self.assertEqual(config["location"], "Home")
+        self.assertEqual(config["location"], "HITS Campus")
         self.assertEqual(config["harvest_quota"], 250)
         self.assertEqual(config["quota_strictness"], "Strict")
-        self.assertEqual(len(config["topics"]), 1)
-        self.assertEqual(config["topics"][0], "Fuzzy Logic and Deep Neural Networks")
-        self.assertEqual(len(config["subtopics"]), 4)
+        self.assertEqual(len(config["topics"]), 2)
+        self.assertEqual(config["topics"][0], "Fuzzy Machine Learning")
+        self.assertEqual(config["topics"][1], "Graph Neural Networks")
+        self.assertEqual(len(config["subtopics_map"]["Fuzzy Machine Learning"]), 5)
 
-    def test_enforce_hard_caps(self):
-        """Tests that caps (max 5 topics, max 5 subtopics each, max 500 quota) are strictly enforced."""
-        email_body = """
-        [NAME_OF_RUN] Capped_Run
-        [TOPIC_1] Topic 1
-        [TOPIC_2] Topic 2
-        [TOPIC_3] Topic 3
-        [TOPIC_4] Topic 4
-        [TOPIC_5] Topic 5
-        [TOPIC_6] Topic 6 Should Be Ignored
-        [T1_SUBTOPICS] Sub1, Sub2, Sub3, Sub4, Sub5, Sub6 Should Be Dropped
-        [PAPERS_PER_TOPIC] 9999
-        [QUOTA_STRICTNESS] Fast-Capped
-        """
-        config, errors = parse_run_config_tags(email_body)
+    def test_single_line_quick_trigger_format(self):
+        """Verifies parsing of Section 3.A single-line trigger format."""
+        single_line = "[RUN_TODAY]: Yes | [TOPIC]: Fuzzy Neural Networks | [QUOTA]: 100"
+        config, errors = parse_run_config_tags(single_line)
+
         self.assertEqual(errors, [])
         self.assertIsNotNone(config)
-        # Max 5 topics
-        self.assertEqual(len(config["topics"]), 5)
-        # Max 5 subtopics
-        self.assertEqual(len(config["subtopics_map"]["Topic 1"]), 5)
-        # Capped quota at 500
-        self.assertEqual(config["harvest_quota"], 500)
-        self.assertEqual(config["quota_strictness"], "Fast-Capped")
+        self.assertEqual(config["topics"], ["Fuzzy Neural Networks"])
+        self.assertEqual(config["harvest_quota"], 100)
+
+    def test_parameter_adjustment_validation_errors(self):
+        """Verifies detection of boundary overflows (>500 quota, >5 subtopics) for Section 4 notices."""
+        overflow_body = """
+        [NAME_OF_RUN]: Overflow_Run
+        [TOPIC_1]: Deep Learning
+        [T1_SUBTOPICS]: Sub1, Sub2, Sub3, Sub4, Sub5, Sub6, Sub7
+        [PAPERS_PER_TOPIC]: 700
+        """
+        config, errors = parse_run_config_tags(overflow_body)
+        self.assertIsNone(config)
+        self.assertGreater(len(errors), 0)
+
+        error_text = " ".join(errors)
+        self.assertIn("700 papers", error_text)
+        self.assertIn("ceiling is 500", error_text)
+        self.assertIn("7 subtopics", error_text)
+        self.assertIn("Maximum allowed is 5", error_text)
 
     def test_validation_error_on_missing_topics(self):
         email_body = """
-        [NAME_OF_RUN] Empty_Topic_Run
-        [BATCH_RUN] No
-        [PAPERS_PER_TOPIC] 250
+        [NAME_OF_RUN]: Empty_Topic_Run
+        [BATCH_RUN]: No
+        [PAPERS_PER_TOPIC]: 250
         """
         config, errors = parse_run_config_tags(email_body)
         self.assertIsNone(config)

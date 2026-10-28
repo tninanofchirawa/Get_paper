@@ -124,7 +124,8 @@ async def run_spontaneous(
     email_dispatcher.send_run_completion_report(
         run_config=run_config,
         metrics=final_metrics,
-        excel_path=excel_path
+        excel_path=excel_path,
+        papers=analyzed_papers
     )
 
     # Clean cache immediately following completed run

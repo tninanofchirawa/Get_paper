@@ -149,6 +149,7 @@ async def execute_email_triggered_pipeline(run_config: Dict[str, Any], sender_em
             run_config=run_config,
             metrics=final_metrics,
             excel_path=out_file,
+            papers=analyzed_papers,
             recipient=sender_email
         )
 
@@ -248,7 +249,7 @@ class ThreeTierScheduler:
             parsed_config, errors = parse_run_config_tags(body)
             if errors:
                 print(f"⚠️ [IMAP Listener] Validation errors in email from '{sender}': {errors}")
-                email_dispatcher.send_corrective_email(sender, errors, body)
+                email_dispatcher.send_corrective_email(sender, errors, body, date_str=date_str)
             else:
                 print(f"✅ [IMAP Listener] Valid configuration accepted from '{sender}'.")
                 # Trigger async harvesting & verification pipeline
