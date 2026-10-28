@@ -1,0 +1,740 @@
+{
+  "default": {
+    "main_topics": [
+      "fuzzy logic",
+      "soft computing",
+      "neural networks"
+    ],
+    "subtopics": [
+      "neuro-fuzzy",
+      "anfis architecture",
+      "takagi-sugeno",
+      "rule extraction",
+      "fuzzy rough sets",
+      "interval type-2",
+      "membership function optimization"
+    ]
+  },
+  "datasets": {
+    "alpha_cuts": {
+      "csv": "input/alpha_cuts.csv",
+      "quota": 180,
+      "main_topics": [
+        "fuzzy sets",
+        "extension principle",
+        "alpha cuts"
+      ],
+      "subtopics": [
+        "interval representations",
+        "decomposition theorem",
+        "zadeh extension",
+        "fuzzy mappings",
+        "fuzzy numbers"
+      ]
+    },
+    "anfis": {
+      "csv": "input/anfis.csv",
+      "quota": 250,
+      "main_topics": [
+        "neuro-fuzzy",
+        "anfis architecture",
+        "fuzzification"
+      ],
+      "subtopics": [
+        "takagi-sugeno",
+        "mamdani systems",
+        "gradient descent",
+        "rule extraction",
+        "adaptive learning"
+      ]
+    },
+    "biomedical": {
+      "csv": "input/biomedical.csv",
+      "quota": 220,
+      "main_topics": [
+        "biomedical engineering",
+        "clinical decision support",
+        "medical diagnostics"
+      ],
+      "subtopics": [
+        "healthcare",
+        "medical imaging",
+        "disease diagnosis",
+        "patient monitoring",
+        "physiological signals"
+      ]
+    },
+    "alpha_cuts___extension_principle_materials_database": {
+      "csv": "input/alpha-cuts___extension_principle_materials_database.csv",
+      "quota": 258,
+      "main_topics": [
+        "extension principle",
+        "principle extension",
+        "functions extension"
+      ],
+      "subtopics": [
+        "principle representation",
+        "alphacuts extension",
+        "principle alphacuts",
+        "alphacuts interval",
+        "interval representations",
+        "representations decomposition",
+        "decomposition principle",
+        "representation theorem",
+        "theorem zadehs",
+        "zadehs extension"
+      ]
+    },
+    "anfis_architecture___fuzzification_materials_database": {
+      "csv": "input/anfis_architecture___fuzzification_materials_database.csv",
+      "quota": 350,
+      "main_topics": [
+        "anfis architecture",
+        "architecture fuzzification",
+        "inference anfis"
+      ],
+      "subtopics": [
+        "adaptive neuro-fuzzy",
+        "neuro-fuzzy inference",
+        "aggregation layer",
+        "layer output",
+        "normalization layer",
+        "layer normalization",
+        "fuzzification layer",
+        "layer rule",
+        "fuzzification fivelayer",
+        "fivelayer anfis"
+      ]
+    },
+    "automatic_differentiation_in_fuzzy_systems_materials_database": {
+      "csv": "input/automatic_differentiation_in_fuzzy_systems_materials_database.csv",
+      "quota": 274,
+      "main_topics": [
+        "automatic differentiation",
+        "fuzzy sets",
+        "fuzzy logic"
+      ],
+      "subtopics": [
+        "fuzzy optimization",
+        "fuzzy inference",
+        "optimization automatic",
+        "differentiation autograd",
+        "differentiation fuzzy",
+        "fuzzy gradientbased",
+        "gradientbased fuzzy",
+        "autograd fuzzy",
+        "fuzzy fuzzyr",
+        "fuzzyr automatic"
+      ]
+    },
+    "concept_drift___shift_adaptation_materials_database": {
+      "csv": "input/concept_drift___shift_adaptation_materials_database.csv",
+      "quota": 330,
+      "main_topics": [
+        "concept drift",
+        "drift detection",
+        "data streams"
+      ],
+      "subtopics": [
+        "machine learning",
+        "detection concept",
+        "changing data",
+        "drift monitoring",
+        "adaptation concept",
+        "drift shift",
+        "shift detection",
+        "structural changes",
+        "changes learning",
+        "concept shift"
+      ]
+    },
+    "derivative_free_metaheuristic_algorithms_materials_database": {
+      "csv": "input/derivative-free_metaheuristic_algorithms_materials_database.csv",
+      "quota": 427,
+      "main_topics": [
+        "swarm optimization",
+        "particle swarm",
+        "optimization computational"
+      ],
+      "subtopics": [
+        "fuzzy optimization",
+        "optimization problems",
+        "optimization pso",
+        "optimization problem",
+        "objective function",
+        "convex optimization",
+        "optimal control",
+        "swarm intelligence",
+        "evolutionary computing",
+        "fuzzy evolutionary"
+      ]
+    },
+    "evolving_fuzzy_systems__efs__materials_database": {
+      "csv": "input/evolving_fuzzy_systems__efs__materials_database.csv",
+      "quota": 275,
+      "main_topics": [
+        "rule base",
+        "fuzzy rule",
+        "rule bases"
+      ],
+      "subtopics": [
+        "evolving fuzzy",
+        "data stream",
+        "fuzzy efs",
+        "online data",
+        "structure identification",
+        "fuzzy logic",
+        "efs online",
+        "stream learning",
+        "learning selforganizing",
+        "selforganizing fuzzy"
+      ]
+    },
+    "fuzzy_rough_feature___instance_selection_materials_database": {
+      "csv": "input/fuzzy-rough_feature___instance_selection_materials_database.csv",
+      "quota": 268,
+      "main_topics": [
+        "feature selection",
+        "pattern recognition",
+        "instance selection"
+      ],
+      "subtopics": [
+        "fuzzy rough",
+        "fuzzy classification",
+        "classification clustering",
+        "clustering pattern",
+        "fuzzyrough feature",
+        "feature subset",
+        "subset selection",
+        "machine learning",
+        "feature instance",
+        "rough sets"
+      ]
+    },
+    "fuzzy_applications_in_biomedical_engineering___clinical_decision_support_materials_database": {
+      "csv": "input/fuzzy_applications_in_biomedical_engineering___clinical_decision_support_materials_database.csv",
+      "quota": 310,
+      "main_topics": [
+        "decision support",
+        "clinical decision",
+        "medical diagnosis"
+      ],
+      "subtopics": [
+        "biomedical engineering",
+        "engineering clinical",
+        "diagnosis biomedical",
+        "fuzzy healthcare",
+        "healthcare medical",
+        "deep learning",
+        "artificial intelligence",
+        "medical image",
+        "machine learning",
+        "disease diagnosis"
+      ]
+    },
+    "fuzzy_applications_in_cybersecurity___cyber_physical_systems_materials_database": {
+      "csv": "input/fuzzy_applications_in_cybersecurity___cyber-physical_systems_materials_database.csv",
+      "quota": 350,
+      "main_topics": [
+        "intrusion detection",
+        "network security",
+        "machine learning"
+      ],
+      "subtopics": [
+        "fuzzy cybersecurity",
+        "threat detection",
+        "cybersecurity network",
+        "risk assessment",
+        "intelligent threat",
+        "security intelligent",
+        "artificial intelligence",
+        "cyber security",
+        "cyber physical",
+        "cyber threats"
+      ]
+    },
+    "fuzzy_applications_in_financial_engineering___risk_assessment_materials_database": {
+      "csv": "input/fuzzy_applications_in_financial_engineering___risk_assessment_materials_database.csv",
+      "quota": 350,
+      "main_topics": [
+        "time series",
+        "risk assessment",
+        "machine learning"
+      ],
+      "subtopics": [
+        "stock market",
+        "deep learning",
+        "financial risk",
+        "time-series forecasting",
+        "fuzzy time-series",
+        "forecasting sequential",
+        "risk management",
+        "credit risk",
+        "financial time",
+        "timeseries prediction"
+      ]
+    },
+    "fuzzy_applications_in_smart_cities__digital_twins___iot_materials_database": {
+      "csv": "input/fuzzy_applications_in_smart_cities__digital_twins___iot_materials_database.csv",
+      "quota": 350,
+      "main_topics": [
+        "digital twins",
+        "internet things",
+        "smart cities"
+      ],
+      "subtopics": [
+        "digital twin",
+        "things iot",
+        "iot smart",
+        "artificial intelligence",
+        "smart city",
+        "iot devices",
+        "embedded intelligence",
+        "cities embedded",
+        "energy management",
+        "industrial iot"
+      ]
+    },
+    "fuzzy_applications_in_sustainable_agriculture___environmental_intelligence_materials_database": {
+      "csv": "input/fuzzy_applications_in_sustainable_agriculture___environmental_intelligence_materials_database.csv",
+      "quota": 350,
+      "main_topics": [
+        "artificial intelligence",
+        "machine learning",
+        "precision agriculture"
+      ],
+      "subtopics": [
+        "environmental intelligence",
+        "intelligence smart",
+        "agriculture food",
+        "fuzzy agriculture",
+        "food environmental",
+        "smart sustainability",
+        "crop yield",
+        "water management",
+        "remote sensing",
+        "sustainable agriculture"
+      ]
+    },
+    "fuzzy_convolutional_neural_networks__fuzzy_cnns__materials_database": {
+      "csv": "input/fuzzy_convolutional_neural_networks__fuzzy_cnns__materials_database.csv",
+      "quota": 350,
+      "main_topics": [
+        "fuzzy logic",
+        "deep learning",
+        "neural networks"
+      ],
+      "subtopics": [
+        "convolutional neural",
+        "neural network",
+        "fuzzy sets",
+        "membership functions",
+        "feature extraction",
+        "fuzzy membership",
+        "fuzzy pooling",
+        "fuzzy set",
+        "fuzzy neural",
+        "image data"
+      ]
+    },
+    "fuzzy_operations___aggregation_materials_database": {
+      "csv": "input/fuzzy_operations___aggregation_materials_database.csv",
+      "quota": 281,
+      "main_topics": [
+        "product sum",
+        "algebraic product",
+        "fuzzy sets"
+      ],
+      "subtopics": [
+        "sum bounded",
+        "drastic product",
+        "bounded product",
+        "fuzzy operations",
+        "operations aggregation",
+        "aggregation tnorms",
+        "tnorms tconorms",
+        "tconorms fuzzy",
+        "fuzzy complements",
+        "complements algebraic"
+      ]
+    },
+    "fuzzy_recurrent___sequential_models_materials_database": {
+      "csv": "input/fuzzy_recurrent___sequential_models_materials_database.csv",
+      "quota": 350,
+      "main_topics": [
+        "neural networks",
+        "fuzzy logic",
+        "fuzzy inference"
+      ],
+      "subtopics": [
+        "deep learning",
+        "recurrent neural",
+        "neural network",
+        "time series",
+        "networks fuzzy",
+        "fuzzy sets",
+        "short-term memory",
+        "long short-term",
+        "fuzzy recurrent",
+        "memory lstm"
+      ]
+    },
+    "fuzzy_relations___equations_materials_database": {
+      "csv": "input/fuzzy_relations___equations_materials_database.csv",
+      "quota": 339,
+      "main_topics": [
+        "fuzzy relation",
+        "relation equations",
+        "fuzzy sets"
+      ],
+      "subtopics": [
+        "fuzzy relations",
+        "fuzzy logic",
+        "equations fuzzy",
+        "relation matrices",
+        "relations equations",
+        "matrices maxmin",
+        "maxmin composition",
+        "composition maxproduct",
+        "maxproduct composition",
+        "composition cylindrical"
+      ]
+    },
+    "fuzzy_rough_set_approximations_materials_database": {
+      "csv": "input/fuzzy_rough_set_approximations_materials_database.csv",
+      "quota": 350,
+      "main_topics": [
+        "rough set",
+        "fuzzy rough",
+        "approximations fuzzy"
+      ],
+      "subtopics": [
+        "fuzzy sets",
+        "rough sets",
+        "fuzzy logic",
+        "upper approximations",
+        "fuzzy set",
+        "set theory",
+        "boundary region",
+        "feature selection",
+        "attribute reduction",
+        "lower approximations"
+      ]
+    },
+    "fuzzy_transfer_learning___domain_adaptation_materials_database": {
+      "csv": "input/fuzzy_transfer_learning___domain_adaptation_materials_database.csv",
+      "quota": 591,
+      "main_topics": [
+        "transfer learning",
+        "domain adaptation",
+        "fuzzy transfer"
+      ],
+      "subtopics": [
+        "knowledge transfer",
+        "machine learning",
+        "learning domain",
+        "fuzzy rules",
+        "target domain",
+        "fuzzy logic",
+        "fuzzy sets",
+        "domain knowledge",
+        "deep learning",
+        "fuzzy domain"
+      ]
+    },
+    "fuzzy_transformers___foundation_models_materials_database": {
+      "csv": "input/fuzzy_transformers___foundation_models_materials_database.csv",
+      "quota": 430,
+      "main_topics": [
+        "fuzzy similarity",
+        "fuzzy sets",
+        "similarity metrics"
+      ],
+      "subtopics": [
+        "large language",
+        "attention mechanisms",
+        "restricted boltzmann",
+        "boltzmann machines",
+        "foundation fuzzy",
+        "fuzzy transformers",
+        "transformers foundation",
+        "metrics attention",
+        "mechanisms scaled",
+        "scaled dotproduct"
+      ]
+    },
+    "general_type_2___type_3_fuzzy_logic_systems_materials_database": {
+      "csv": "input/general_type-2___type-3_fuzzy_logic_systems_materials_database.csv",
+      "quota": 263,
+      "main_topics": [
+        "fuzzy logic",
+        "type-2 fuzzy",
+        "fuzzy sets"
+      ],
+      "subtopics": [
+        "fuzzy set",
+        "interval type-2",
+        "set extensions",
+        "general type-2",
+        "fuzzy inference",
+        "logic reasoning",
+        "general type2",
+        "type3 fuzzy",
+        "discrete event",
+        "deep learning"
+      ]
+    },
+    "granular_computing___information_granules_materials_database": {
+      "csv": "input/granular_computing___information_granules_materials_database.csv",
+      "quota": 267,
+      "main_topics": [
+        "granular computing",
+        "information granules",
+        "computing information"
+      ],
+      "subtopics": [
+        "nearest neighbor",
+        "granules granular",
+        "granules typicality",
+        "typicality eccentricity",
+        "eccentricity data",
+        "data teda",
+        "teda fuzzyrough",
+        "fuzzyrough nearest",
+        "neighbor frnn",
+        "frnn classifiers"
+      ]
+    },
+    "hybrid_structural_topologies_materials_database": {
+      "csv": "input/hybrid_structural_topologies_materials_database.csv",
+      "quota": 348,
+      "main_topics": [
+        "machine learning",
+        "neural networks",
+        "deep learning"
+      ],
+      "subtopics": [
+        "fuzzy machine",
+        "learning neuro-fuzzy",
+        "architectures parallel",
+        "reinforcement learning",
+        "hybrid structural",
+        "structural topologies",
+        "topologies sequential",
+        "sequential linear",
+        "linear architectures",
+        "parallel jointlearning"
+      ]
+    },
+    "interpretability___rule_extraction_materials_database": {
+      "csv": "input/interpretability___rule_extraction_materials_database.csv",
+      "quota": 327,
+      "main_topics": [
+        "machine learning",
+        "artificial intelligence",
+        "interpretability rule"
+      ],
+      "subtopics": [
+        "accuracy interpretability",
+        "rule extraction",
+        "rule base",
+        "predictive accuracy",
+        "large language",
+        "deep learning",
+        "explainable xai",
+        "extraction intrinsic",
+        "intrinsic explainability",
+        "explainability humanreadable"
+      ]
+    },
+    "logic_oriented_fuzzy_neurons_materials_database": {
+      "csv": "input/logic-oriented_fuzzy_neurons_materials_database.csv",
+      "quota": 263,
+      "main_topics": [
+        "neurons weighted",
+        "fuzzy neurons",
+        "logic neurons"
+      ],
+      "subtopics": [
+        "logicoriented fuzzy",
+        "weighted tnorms",
+        "tnorms neurons",
+        "weighted tconorms",
+        "tconorms referential",
+        "referential logic",
+        "neurons theoretical",
+        "theoretical methodological",
+        "methodological foundations",
+        "neuronal networks"
+      ]
+    },
+    "mathematical_foundations___fuzzy_set_theory_materials_database": {
+      "csv": "input/mathematical_foundations___fuzzy_set_theory_materials_database.csv",
+      "quota": 272,
+      "main_topics": [
+        "fuzzy sets",
+        "fuzzy set",
+        "set theory"
+      ],
+      "subtopics": [
+        "sets fuzzy",
+        "crisp sets",
+        "foundations fuzzy",
+        "fuzzy cardinality",
+        "mathematical foundations",
+        "universe discourse",
+        "membership grades",
+        "classical crisp",
+        "normality convexity",
+        "convexity fuzzy"
+      ]
+    },
+    "multi_objective_evolutionary_fuzzy_systems_materials_database": {
+      "csv": "input/multi-objective_evolutionary_fuzzy_systems_materials_database.csv",
+      "quota": 509,
+      "main_topics": [
+        "multi-objective optimization",
+        "fuzzy optimization",
+        "optimization computational"
+      ],
+      "subtopics": [
+        "optimization problems",
+        "machine learning",
+        "evolutionary multi-objective",
+        "multi-objective evolutionary",
+        "evolutionary fuzzy",
+        "fuzzy sets",
+        "multiobjective evolutionary",
+        "fuzzy multiobjective",
+        "deep learning",
+        "fuzzy inference"
+      ]
+    },
+    "neuro_fuzzy_learning___tuning_materials_database": {
+      "csv": "input/neuro-fuzzy_learning___tuning_materials_database.csv",
+      "quota": 326,
+      "main_topics": [
+        "parameter estimation",
+        "gradient descent",
+        "machine learning"
+      ],
+      "subtopics": [
+        "hybrid learning",
+        "parameter optimization",
+        "least squares",
+        "estimation lse",
+        "descent backpropagation",
+        "ugc care",
+        "neurofuzzy learning",
+        "learning tuning",
+        "tuning hybrid",
+        "learning leastsquares"
+      ]
+    },
+    "non_standard_fuzzy_sets_materials_database": {
+      "csv": "input/non-standard_fuzzy_sets_materials_database.csv",
+      "quota": 500,
+      "main_topics": [
+        "fuzzy sets",
+        "intuitionistic fuzzy",
+        "fuzzy set"
+      ],
+      "subtopics": [
+        "hesitant fuzzy",
+        "fermatean fuzzy",
+        "pythagorean fuzzy",
+        "sets intuitionistic",
+        "sets hesitant",
+        "complex fuzzy",
+        "nonstandard fuzzy",
+        "sets pythagorean",
+        "sets fermatean",
+        "sets complex"
+      ]
+    },
+    "rule_extraction___pruning_materials_database": {
+      "csv": "input/rule_extraction___pruning_materials_database.csv",
+      "quota": 350,
+      "main_topics": [
+        "fuzzy rule",
+        "rule base",
+        "rule extraction"
+      ],
+      "subtopics": [
+        "rule generation",
+        "numerical data",
+        "machine learning",
+        "rule pruning",
+        "tuning fuzzy",
+        "membership function",
+        "generation numerical",
+        "automated fuzzy",
+        "extraction pruning",
+        "pruning automated"
+      ]
+    },
+    "takagi_sugeno_kang__tsk____mamdani_systems_materials_database": {
+      "csv": "input/takagi-sugeno-kang__tsk____mamdani_systems_materials_database.csv",
+      "quota": 345,
+      "main_topics": [
+        "fuzzy logic",
+        "fuzzy inference",
+        "tsk fuzzy"
+      ],
+      "subtopics": [
+        "type-2 fuzzy",
+        "interval type-2",
+        "machine learning",
+        "fuzzy rules",
+        "mamdani fuzzy",
+        "fuzzy set",
+        "neural network",
+        "linear consequents",
+        "neural networks",
+        "takagisugenokang tsk"
+      ]
+    },
+    "type_2___interval_type_2_fuzzy_logic_systems__it2_fls__materials_database": {
+      "csv": "input/type-2___interval_type-2_fuzzy_logic_systems__it2-fls__materials_database.csv",
+      "quota": 319,
+      "main_topics": [
+        "type-2 fuzzy",
+        "fuzzy logic",
+        "interval type-2"
+      ],
+      "subtopics": [
+        "membership functions",
+        "fuzzy sets",
+        "fuzzy set",
+        "set extensions",
+        "type-1 fuzzy",
+        "type fuzzy",
+        "general type-2",
+        "membership function",
+        "footprint uncertainty",
+        "fuzzy membership"
+      ]
+    },
+    "unineurons__nullneurons___uni_nullneurons_materials_database": {
+      "csv": "input/unineurons__nullneurons___uni-nullneurons_materials_database.csv",
+      "quota": 273,
+      "main_topics": [
+        "unineurons nullneurons",
+        "nullneurons uninullneurons",
+        "neural architectures"
+      ],
+      "subtopics": [
+        "uninullneurons unineurons",
+        "uninullneurons nuninorms",
+        "nuninorms nullnorms",
+        "nullnorms identity",
+        "identity thresholds",
+        "thresholds combined",
+        "combined andor",
+        "andor logic",
+        "logic neural",
+        "architectures theoretical"
+      ]
+    }
+  }
+}

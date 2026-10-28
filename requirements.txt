@@ -1,0 +1,25 @@
+# Unified Academic Paper Harvester, Verifier & 100% Gmail Pipeline
+# Python 3.11+ Requirements
+
+# Networking & Async
+aiohttp>=3.9.0
+requests>=2.31.0
+httpx>=0.27.0
+urllib3>=2.0.0
+
+# Resilient Retries & Backoff (tenacity handles 429 and Retry-After)
+tenacity>=8.2.0
+
+# Data Processing & Spreadsheet Automation
+pandas>=2.0.0
+openpyxl>=3.1.0
+tqdm>=4.66.0
+
+# Templating & Formatting
+jinja2>=3.1.2
+
+# Google Drive API v3 Client
+google-api-python-client>=2.100.0
+google-auth>=2.20.0
+google-auth-httplib2>=0.1.0
+google-auth-oauthlib>=1.0.0

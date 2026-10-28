@@ -1,0 +1,45 @@
+# ==============================================================================
+# Production .gitignore for Unified Academic Paper Harvester & Verifier
+# ==============================================================================
+
+# 1. Environment & API Secrets
+.env
+.env.local
+.env.*
+!.env.example
+service_account.json
+
+# 2. Spreadsheets & Data Exports (ignoring run outputs while preserving data templates and inputs)
+*.xlsx
+*.xls
+!data/scopus_source_list.xlsx
+*.csv
+!data/wos_master_journal_list.csv
+!input/*.csv
+
+# 3. Python Bytecode & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# 4. Cache, Logs, and Temp runtime dumps
+cache/*
+!cache/.gitkeep
+logs/*
+!logs/.gitkeep
+temp/*
+!temp/.gitkeep
+output/*
+!output/.gitkeep
+
+# 5. SQLite Databases
+data/*.db
+data/*.db-wal
+data/*.db-shm
+
+# 6. OS & Editor metadata
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
