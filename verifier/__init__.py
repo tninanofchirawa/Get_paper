@@ -12,6 +12,8 @@ from verifier.openalex_verifier import OpenAlexVerifier
 from verifier.crossref_verifier import CrossrefVerifier
 from verifier.arxiv_verifier import ArxivVerifier
 from verifier.semantic_scholar_verifier import SemanticScholarVerifier
+from verifier.doaj_verifier import DoajVerifier
+from verifier.tiered_verifier import TieredWorkloadVerifier, SemanticScholarSafetyValve
 from verifier.dual_branch import DualBranchVerifier
 
 __all__ = [
@@ -26,5 +28,8 @@ __all__ = [
     "CrossrefVerifier",
     "ArxivVerifier",
     "SemanticScholarVerifier",
+    "DoajVerifier",
+    "TieredWorkloadVerifier",
+    "SemanticScholarSafetyValve",
     "DualBranchVerifier",
 ]

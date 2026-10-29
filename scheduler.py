@@ -13,16 +13,16 @@ import logging
 from typing import Dict, Any, Optional
 
 from config import cfg
-from database import db
-from email_service import email_dispatcher, imap_reader, parse_run_config_tags
+from core.database import db
+from services.notifications import email_dispatcher, imap_reader, parse_run_config_tags
 from services.cache.cleaner import purge_stale_cache, purge_nightly_cache
 from harvester.pipeline import AsyncHarvestingPipeline
 from verifier.dual_branch import DualBranchVerifier
-from analyzer import PaperAnalyzer
-from excel_builder import StandardizedExcelBuilder
-from csv_builder import StandardizedCsvBuilder
-from drive_sync import drive_client
-from batch_runner import ResilientBatchRunner
+from core.analyzer import PaperAnalyzer
+from utils.excel_builder import StandardizedExcelBuilder
+from utils.csv_builder import StandardizedCsvBuilder
+from services.drive import drive_client
+from core.batch_runner import ResilientBatchRunner
 
 logger = logging.getLogger("SchedulerDaemon")
 

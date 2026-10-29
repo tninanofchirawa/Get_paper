@@ -48,10 +48,6 @@ def execute_with_429_retry(
 
                 if attempt < max_retries:
                     logger.warning(
-                        f"[{service_name}] HTTP 429 (Rate Limit Hit). Attempt {attempt}/{max_retries}. "
-                        f"Backing off for {sleep_time:.2f}s..."
-                    )
-                    print(
                         f"⚠️ [{service_name}] HTTP 429 (Rate Limit Hit). Attempt {attempt}/{max_retries}. "
                         f"Backing off for {sleep_time:.2f}s..."
                     )

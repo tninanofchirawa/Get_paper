@@ -85,6 +85,7 @@ class Paper:
     open_access: Optional[bool] = None
     verification_source: str = ""
     verified_sources: List[str] = field(default_factory=list)
+    verified_via: str = "Unverified"
     citation_count: int = 0
     index_status: str = ""
 
@@ -173,6 +174,7 @@ class Paper:
             "OpenAccess (Y/N)": bool_to_yn(self.open_access),
             "Verification Source": self.verification_source or "OpenAlex Fallback",
             "Verified Sources": json.dumps(v_sources),
+            "Verified_Via": self.verified_via or "Unverified",
 
             # Materials Database detailed columns
             "Material ID": self.material_id,

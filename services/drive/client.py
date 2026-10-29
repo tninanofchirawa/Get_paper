@@ -63,12 +63,29 @@ class GoogleDriveClient:
             "https://www.googleapis.com/auth/drive"
         ]
 
+        # Determine if interactive browser login should be allowed on first run
+        is_test_env = "unittest" in sys.modules or "pytest" in sys.modules
+        base_dir = cfg.BASE_DIR
+        has_credentials = (
+            (base_dir / "credentials.json").exists()
+            or (base_dir / "Credential.json").exists()
+            or os.path.exists("credentials.json")
+            or os.path.exists("Credential.json")
+        )
+        has_token = (
+            (base_dir / "token.json").exists()
+            or (base_dir / "Token.json").exists()
+            or os.path.exists("token.json")
+            or os.path.exists("Token.json")
+        )
+        allow_interactive = (not is_test_env) and has_credentials and (not has_token)
+
         # Method 1: User-level OAuth 2.0 (token.json or credentials.json)
         oauth_creds = load_user_oauth_credentials(
-            token_path="token.json",
-            credentials_path="credentials.json",
+            token_path=str(base_dir / "token.json"),
+            credentials_path=str(base_dir / "credentials.json"),
             scopes=scopes,
-            allow_interactive=False
+            allow_interactive=allow_interactive
         )
         if oauth_creds:
             try:
@@ -101,14 +118,20 @@ class GoogleDriveClient:
 
         # Method 2: Service Account credentials (Workspace Shared Drive)
         sa_info = None
+        resolved_sa_path = self.service_account_path
+        if not os.path.exists(resolved_sa_path):
+            candidate_sa = base_dir / self.service_account_path
+            if candidate_sa.exists():
+                resolved_sa_path = str(candidate_sa)
+
         if cfg.GDRIVE_SERVICE_ACCOUNT_RAW:
             try:
                 sa_info = json.loads(cfg.GDRIVE_SERVICE_ACCOUNT_RAW)
             except Exception:
                 pass
-        elif os.path.exists(self.service_account_path):
+        elif os.path.exists(resolved_sa_path):
             try:
-                with open(self.service_account_path, "r", encoding="utf-8") as f:
+                with open(resolved_sa_path, "r", encoding="utf-8") as f:
                     sa_info = json.load(f)
             except Exception:
                 pass

@@ -43,6 +43,8 @@ class SemanticScholarClient:
         self.limiter = _S2_RATE_LIMITER
         self.key_pool: List[str] = cfg.get_key_pool("semantic_scholar")
         self.current_key_idx: int = 0
+        self.last_status_code: Optional[int] = None
+        self.on_429_callback: Optional[Any] = None
 
     def _get_api_key(self) -> str:
         """Retrieves active S2 API key from environment or key pool."""
@@ -98,8 +100,11 @@ class SemanticScholarClient:
             )
 
             if resp is None:
+                self.last_status_code = None
                 self.circuit_breaker.record_failure(None, "Timeout or connection error")
                 return None
+
+            self.last_status_code = resp.status_code
 
             if resp.status_code == 200:
                 self.circuit_breaker.record_success()
@@ -116,6 +121,11 @@ class SemanticScholarClient:
                 }
             elif resp.status_code == 429:
                 self._rotate_key()
+                if self.on_429_callback:
+                    try:
+                        self.on_429_callback()
+                    except Exception:
+                        pass
                 self.circuit_breaker.record_failure(429, "Rate limited")
                 return None
             elif resp.status_code in (401, 403):
@@ -129,6 +139,38 @@ class SemanticScholarClient:
             logger.warning(f"[SemanticScholar] verify_doi failed for '{doi}': {e}")
             self.circuit_breaker.record_failure(None, str(e))
             return None
+
+    def verify_title(self, title: str) -> Optional[Dict[str, Any]]:
+        """Verifies metadata for a title against Semantic Scholar Graph API."""
+        if not title or self.circuit_breaker.is_tripped():
+            return None
+        items, _, _ = self.search_papers(query=title, limit=1)
+        if not items:
+            return None
+        data = items[0]
+        matched_title = data.get("title", "")
+        from harvester.models import clean_matching_title, sanitize_doi
+        from difflib import SequenceMatcher
+        s1 = clean_matching_title(title)
+        s2 = clean_matching_title(matched_title)
+        if SequenceMatcher(None, s1, s2).ratio() < 0.65:
+            return None
+
+        self.circuit_breaker.record_success()
+        venue = data.get("venue") or ""
+        oa = data.get("openAccessPdf") or {}
+        ext_ids = data.get("externalIds") or {}
+        doi = sanitize_doi(ext_ids.get("DOI", ""))
+
+        return {
+            "confirmed": True,
+            "title": matched_title,
+            "venue": venue,
+            "year": str(data.get("year") or ""),
+            "doi": doi,
+            "pdf_link": oa.get("url", ""),
+            "external_ids": ext_ids
+        }
 
     def search_papers(
         self,

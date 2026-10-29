@@ -18,17 +18,23 @@ venv.bak/
 service_account.json
 credentials.json
 credentials*.json
+Credential.json
+Credential*.json
 token.json
+Token.json
 
 # 3. Spreadsheets & Data Exports (ignoring run outputs while preserving data templates and inputs)
 output/*
 !output/.gitkeep
+storage/output/*
+!storage/output/.gitkeep
 *.csv
 *.xlsx
 *.xls
 !data/scopus_source_list.xlsx
 !data/wos_master_journal_list.csv
 !input/*.csv
+!storage/input/*.csv
 
 # 4. Python Bytecode, Caches & Wheels
 __pycache__/
@@ -43,11 +49,17 @@ htmlcov/
 # 5. Local Runtime Caches, Logs, and Temp runtime dumps
 cache/*
 !cache/.gitkeep
+storage/cache/*
+!storage/cache/.gitkeep
 .cache/
 logs/*
 !logs/.gitkeep
+storage/logs/*
+!storage/logs/.gitkeep
 temp/*
 !temp/.gitkeep
+storage/temp/*
+!storage/temp/.gitkeep
 
 # 6. SQLite Databases & WAL Journal Files
 *.db

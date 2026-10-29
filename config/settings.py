@@ -105,15 +105,35 @@ class PipelineConfig:
 
     # 7. Paths & Storage
     BASE_DIR: Path = Path(__file__).resolve().parent.parent
+    STORAGE_DIR: Path = BASE_DIR / "storage"
     DATABASE_PATH: str = os.getenv("DATABASE_PATH", str(BASE_DIR / "data" / "pipeline.db"))
-    INPUT_DIR: str = os.getenv("INPUT_DIR", str(BASE_DIR / "input"))
-    OUTPUT_DIR: str = os.getenv("OUTPUT_DIR", str(BASE_DIR / "output"))
-    CACHE_DIR: str = os.getenv("CACHE_DIR", str(BASE_DIR / "cache"))
-    LOGS_DIR: str = os.getenv("LOGS_DIR", str(BASE_DIR / "logs"))
-    TEMP_DIR: str = os.getenv("TEMP_DIR", str(BASE_DIR / "temp"))
+    INPUT_DIR: str = os.getenv("INPUT_DIR", str(STORAGE_DIR / "input"))
+    OUTPUT_DIR: str = os.getenv("OUTPUT_DIR", str(STORAGE_DIR / "output"))
+    CACHE_DIR: str = os.getenv("CACHE_DIR", str(STORAGE_DIR / "cache"))
+    LOGS_DIR: str = os.getenv("LOGS_DIR", str(STORAGE_DIR / "logs"))
+    TEMP_DIR: str = os.getenv("TEMP_DIR", str(STORAGE_DIR / "temp"))
     CONFIG_DIR: str = os.getenv("CONFIG_DIR", str(BASE_DIR / "config"))
     APP_TIMEZONE: str = os.getenv("APP_TIMEZONE", "Asia/Kolkata")
     MAX_CACHE_SIZE_MB: float = float(os.getenv("MAX_CACHE_SIZE_MB", str(MAX_CACHE_SIZE_MB)))
+
+    def __post_init__(self):
+        """Normalizes runtime storage paths to resolve within STORAGE_DIR if relative."""
+        for attr, default_subdir in [
+            ("INPUT_DIR", "input"),
+            ("OUTPUT_DIR", "output"),
+            ("CACHE_DIR", "cache"),
+            ("LOGS_DIR", "logs"),
+            ("TEMP_DIR", "temp"),
+        ]:
+            val = getattr(self, attr, "")
+            if not val or val == default_subdir:
+                setattr(self, attr, str(self.STORAGE_DIR / default_subdir))
+            elif not os.path.isabs(val):
+                p = Path(val)
+                if "storage" not in p.parts:
+                    setattr(self, attr, str(self.STORAGE_DIR / val))
+                else:
+                    setattr(self, attr, str(self.BASE_DIR / p))
 
     @property
     def has_scopus_credentials(self) -> bool:

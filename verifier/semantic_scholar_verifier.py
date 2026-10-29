@@ -19,3 +19,7 @@ class SemanticScholarVerifier:
     def verify_doi(self, doi: str) -> Optional[Dict[str, Any]]:
         """Queries Semantic Scholar by DOI."""
         return self.client.verify_doi(doi)
+
+    def verify_title(self, title: str) -> Optional[Dict[str, Any]]:
+        """Queries Semantic Scholar by title."""
+        return self.client.verify_title(title)

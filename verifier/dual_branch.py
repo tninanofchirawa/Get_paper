@@ -23,6 +23,8 @@ from verifier.openalex_verifier import OpenAlexVerifier
 from verifier.crossref_verifier import CrossrefVerifier
 from verifier.arxiv_verifier import ArxivVerifier
 from verifier.semantic_scholar_verifier import SemanticScholarVerifier
+from verifier.doaj_verifier import DoajVerifier
+from verifier.tiered_verifier import TieredWorkloadVerifier
 
 logger = logging.getLogger("DualBranchVerifier")
 
@@ -57,6 +59,7 @@ class DualBranchVerifier:
         self.openalex_cb = CircuitBreaker("OpenAlex", failure_threshold=3)
         self.arxiv_cb = CircuitBreaker("arXiv", failure_threshold=3)
         self.s2_cb = CircuitBreaker("Semantic Scholar", failure_threshold=3)
+        self.doaj_cb = CircuitBreaker("DOAJ", failure_threshold=3)
 
         # Verifier clients
         self.scopus_verifier = ScopusVerifier(self.scopus_cb)
@@ -66,6 +69,18 @@ class DualBranchVerifier:
         self.crossref_verifier = CrossrefVerifier(self.crossref_cb)
         self.arxiv_verifier = ArxivVerifier(self.arxiv_cb)
         self.semantic_scholar_verifier = SemanticScholarVerifier(self.s2_cb)
+        self.doaj_verifier = DoajVerifier(self.doaj_cb)
+
+        # Tiered partitioned workload verifier
+        self.tiered_verifier = TieredWorkloadVerifier(
+            semantic_scholar_verifier=self.semantic_scholar_verifier,
+            openalex_verifier=self.openalex_verifier,
+            crossref_verifier=self.crossref_verifier,
+            arxiv_verifier=self.arxiv_verifier,
+            doaj_verifier=self.doaj_verifier,
+            local_db=self.local_db,
+            cache=self.cache
+        )
 
     def get_circuit_status(self) -> Dict[str, str]:
         """Returns the operational status of all verification sources."""
@@ -77,6 +92,7 @@ class DualBranchVerifier:
             "OpenAlex": self.openalex_cb.status_summary,
             "arXiv": self.arxiv_cb.status_summary,
             "Semantic Scholar": self.s2_cb.status_summary,
+            "DOAJ": self.doaj_cb.status_summary,
             "Local DB Matcher": "Active (Offline ISSN Set Intersection)"
         }
 
@@ -157,10 +173,16 @@ class DualBranchVerifier:
             return "arxiv", None, None
 
         def check_semantic_scholar():
-            if not self.s2_cb.is_tripped() and doi:
+            if not self.s2_cb.is_tripped() and not self.tiered_verifier.safety_valve.is_paused and doi:
                 res = self.semantic_scholar_verifier.verify_doi(doi)
                 return "semantic_scholar", res, "Semantic Scholar"
             return "semantic_scholar", None, None
+
+        def check_doaj():
+            if not self.doaj_cb.is_tripped():
+                res = self.doaj_verifier.verify_doi(doi) if doi else self.doaj_verifier.verify_title(paper.title)
+                return "doaj", res, "DOAJ"
+            return "doaj", None, None
 
         tasks = [
             check_scopus,
@@ -169,7 +191,8 @@ class DualBranchVerifier:
             check_crossref,
             check_openalex,
             check_arxiv,
-            check_semantic_scholar
+            check_semantic_scholar,
+            check_doaj
         ]
 
         verified_sources_list: List[str] = []
@@ -252,10 +275,20 @@ class DualBranchVerifier:
             if not paper.pdf_link and s2_data.get("pdf_link"):
                 paper.pdf_link = s2_data["pdf_link"]
 
+        # H. DOAJ
+        doaj_data, _ = raw_results.get("doaj", (None, None))
+        if doaj_data and doaj_data.get("confirmed"):
+            verified_sources_list.append("DOAJ")
+            paper.open_access = True
+            if not paper.venue and doaj_data.get("venue"):
+                paper.venue = doaj_data["venue"]
+            if not paper.pdf_link and doaj_data.get("pdf_link"):
+                paper.pdf_link = doaj_data["pdf_link"]
+
         # 5. Open Access Fallback verification
         # When Scopus and WoS are absent: ensure DOIs, preprint statuses, and venues are verified
         if not paper.scopus_indexed and not paper.wos_indexed:
-            if paper.pdf_link or (oa_data and oa_data.get("is_oa")) or (arxiv_data and arxiv_data.get("confirmed")):
+            if paper.pdf_link or (oa_data and oa_data.get("is_oa")) or (arxiv_data and arxiv_data.get("confirmed")) or (doaj_data and doaj_data.get("confirmed")):
                 paper.open_access = True
             elif "open access" in paper.access_type.lower():
                 paper.open_access = True
@@ -281,6 +314,21 @@ class DualBranchVerifier:
         paper.verified_sources = deduped_sources
         paper.verification_source = ", ".join(deduped_sources) if deduped_sources else "Open Access Fallback"
 
+        # Explicit Verified_Via tracking
+        if not paper.verified_via or paper.verified_via == "Unverified":
+            if "OpenAlex" in deduped_sources:
+                paper.verified_via = "OpenAlex"
+            elif "Crossref" in deduped_sources:
+                paper.verified_via = "Crossref"
+            elif "Semantic Scholar" in deduped_sources:
+                paper.verified_via = "Semantic_Scholar"
+            elif "arXiv" in deduped_sources:
+                paper.verified_via = "arXiv"
+            elif "DOAJ" in deduped_sources:
+                paper.verified_via = "DOAJ"
+            else:
+                paper.verified_via = "Unverified"
+
         # 6. Save in persistent cache
         if cache_key:
             self.cache.set(cache_key, {
@@ -289,7 +337,8 @@ class DualBranchVerifier:
                 "ieee": paper.ieee_indexed,
                 "open_access": paper.open_access,
                 "source": paper.verification_source,
-                "verified_sources": paper.verified_sources
+                "verified_sources": paper.verified_sources,
+                "verified_via": paper.verified_via
             })
 
         return paper
@@ -317,15 +366,41 @@ class DualBranchVerifier:
         progress_callback: Optional[Any] = None
     ) -> List[Paper]:
         """
-        Verifies a list of candidate papers.
+        Verifies a list of candidate papers using 3-way workload partitioning
+        across Semantic Scholar, OpenAlex, and Crossref with automatic sequential fallback ring
+        and arXiv/DOAJ catch-all.
+        If institutional credentials are enabled, institutional APIs (Scopus/WoS/IEEE) are evaluated.
         If only_indexed is True, selectively retains only papers indexed in Scopus or Web of Science.
         """
-        verified = []
-        for idx, p in enumerate(papers, 1):
-            v_p = self.verify_paper(p)
-            verified.append(v_p)
-            if progress_callback:
-                progress_callback(idx, len(papers))
+        if not papers:
+            self.last_excluded_count = 0
+            return []
+
+        # If institutional credentials exist, check institutional APIs for candidates
+        if self.inst_token_flag:
+            for p in papers:
+                doi = p.clean_doi or p.doi
+                if not self.scopus_cb.is_tripped() and cfg.has_scopus_credentials:
+                    res = self.scopus_verifier.verify_doi(doi) if doi else None
+                    if res is True:
+                        p.scopus_indexed = True
+                        if "Scopus" not in p.verified_sources:
+                            p.verified_sources.append("Scopus")
+                if not self.wos_cb.is_tripped() and cfg.WOS_API_KEY and doi:
+                    res = self.wos_verifier.verify_doi(doi)
+                    if res is True:
+                        p.wos_indexed = True
+                        if "Web of Science" not in p.verified_sources:
+                            p.verified_sources.append("Web of Science")
+                if not self.ieee_cb.is_tripped() and cfg.IEEE_API_KEY and doi:
+                    res = self.ieee_verifier.verify_doi(doi)
+                    if res is True:
+                        p.ieee_indexed = True
+                        if "IEEE Xplore" not in p.verified_sources:
+                            p.verified_sources.append("IEEE Xplore")
+
+        # Three-way partitioned aggregator verification with tiered fallback
+        verified = self.tiered_verifier.verify_batch(papers, progress_callback=progress_callback)
 
         self.cache.save()
 

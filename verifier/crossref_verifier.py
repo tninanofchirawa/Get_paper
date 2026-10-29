@@ -19,3 +19,7 @@ class CrossrefVerifier:
     def verify_doi(self, doi: str) -> Optional[Dict[str, Any]]:
         """Queries Crossref by DOI."""
         return self.client.verify_doi(doi)
+
+    def verify_title(self, title: str) -> Optional[Dict[str, Any]]:
+        """Queries Crossref by bibliographic title match."""
+        return self.client.verify_title(title)

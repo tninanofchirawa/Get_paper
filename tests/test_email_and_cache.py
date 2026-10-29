@@ -7,6 +7,7 @@ import time
 import unittest
 from pathlib import Path
 
+from config import cfg
 from cache_cleaner import purge_stale_cache
 from email_service import (
     parse_run_config_tags,
@@ -17,7 +18,7 @@ from email_service import (
 
 class TestCacheCleaner(unittest.TestCase):
     def setUp(self):
-        self.test_cache_dir = "cache/test_cleaner_dir"
+        self.test_cache_dir = os.path.join(cfg.CACHE_DIR, "test_cleaner_dir")
         os.makedirs(self.test_cache_dir, exist_ok=True)
 
         self.fresh_file = os.path.join(self.test_cache_dir, "fresh_cache.json")

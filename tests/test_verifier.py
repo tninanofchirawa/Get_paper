@@ -97,7 +97,9 @@ class TestMultiSourceVerificationAndFilters(unittest.TestCase):
     def test_consolidated_verified_sources_column(self):
         verifier = DualBranchVerifier(local_db=self.local_db, cache=self.cache, inst_token_flag=False)
 
-        # Mock OpenAlex, Crossref, and arXiv responses
+        # Mock OpenAlex, Crossref, arXiv, S2, and DOAJ responses to prevent hanging network calls
+        verifier.semantic_scholar_verifier.verify_doi = MagicMock(return_value=None)
+        verifier.doaj_verifier.verify_doi = MagicMock(return_value=None)
         verifier.openalex_verifier.check_work = MagicMock(return_value={
             "found": True,
             "is_scopus_indexed": True,
@@ -164,7 +166,9 @@ class TestMultiSourceVerificationAndFilters(unittest.TestCase):
     def test_fallback_routing_when_tokens_missing(self):
         verifier = DualBranchVerifier(local_db=self.local_db, cache=self.cache, inst_token_flag=False)
 
-        # Mock OpenAlex return to prevent hanging network calls in sandboxed test
+        # Mock OpenAlex, S2, and DOAJ returns to prevent hanging network calls in sandboxed test
+        verifier.semantic_scholar_verifier.verify_doi = MagicMock(return_value=None)
+        verifier.doaj_verifier.verify_doi = MagicMock(return_value=None)
         verifier.openalex_verifier.check_work = MagicMock(return_value={
             "found": True,
             "is_scopus_indexed": False,

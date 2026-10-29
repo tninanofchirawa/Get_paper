@@ -6,6 +6,7 @@ import os
 import unittest
 import openpyxl
 
+from config import cfg
 from excel_builder import StandardizedExcelBuilder
 from harvester.models import Paper
 from analyzer import PaperAnalyzer
@@ -13,7 +14,7 @@ from analyzer import PaperAnalyzer
 
 class TestStandardizedExcelBuilder(unittest.TestCase):
     def setUp(self):
-        self.test_output = "output/test_standardized_output.xlsx"
+        self.test_output = os.path.join(cfg.OUTPUT_DIR, "test_standardized_output.xlsx")
         if os.path.exists(self.test_output):
             os.remove(self.test_output)
 

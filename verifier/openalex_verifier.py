@@ -77,3 +77,76 @@ class OpenAlexVerifier:
         except Exception as e:
             logger.debug(f"[OpenAlexVerifier] Error querying DOI {clean_doi}: {e}")
             return None
+
+    def verify_doi(self, doi: str) -> Optional[Dict[str, Any]]:
+        """Queries OpenAlex by DOI, returning standard confirmation dict."""
+        res = self.check_work(doi)
+        if not res or not res.get("found"):
+            return None
+        return {
+            "confirmed": True,
+            "venue": res.get("journal", ""),
+            "issn_list": res.get("issns", []),
+            "is_oa": res.get("is_oa", False),
+            "pdf_link": res.get("oa_url", ""),
+            "is_scopus_indexed": res.get("is_scopus_indexed", False),
+            "is_wos_indexed": res.get("is_wos_indexed", False),
+            "doi": doi
+        }
+
+    def verify_title(self, title: str) -> Optional[Dict[str, Any]]:
+        """Queries OpenAlex Works API by title search."""
+        if not title:
+            return None
+        import urllib.parse
+        from harvester.models import clean_matching_title
+        from difflib import SequenceMatcher
+
+        clean_t = title.strip()
+        url = f"https://api.openalex.org/works?filter=title.search:{urllib.parse.quote(clean_t)}&per-page=1"
+        try:
+            resp = self.session.get(url, timeout=12)
+            if resp.status_code == 200:
+                results = resp.json().get("results", [])
+                if not results:
+                    return None
+                work = results[0]
+                matched_title = work.get("title", "")
+                if SequenceMatcher(None, clean_matching_title(clean_t), clean_matching_title(matched_title)).ratio() < 0.65:
+                    return None
+
+                primary_loc = work.get("primary_location") or {}
+                source = primary_loc.get("source") or {}
+                is_scopus = source.get("is_in_scopus") is True
+                journal = source.get("display_name") or ""
+                issns = source.get("issn") or []
+
+                scopus_local = self.local_db.is_scopus_issn(issns)
+                wos_local = self.local_db.is_wos_issn(issns)
+                if scopus_local is True:
+                    is_scopus = True
+
+                oa_obj = work.get("open_access") or {}
+                is_oa = oa_obj.get("is_oa") is True
+                oa_url = oa_obj.get("oa_url") or primary_loc.get("pdf_url") or ""
+
+                raw_doi = work.get("doi", "") or ""
+                doi = raw_doi
+                if doi.startswith("https://doi.org/"):
+                    doi = doi[len("https://doi.org/"):]
+
+                return {
+                    "confirmed": True,
+                    "title": matched_title,
+                    "venue": journal,
+                    "issn_list": issns,
+                    "is_oa": is_oa,
+                    "pdf_link": oa_url,
+                    "is_scopus_indexed": is_scopus,
+                    "is_wos_indexed": wos_local,
+                    "doi": doi
+                }
+            return None
+        except Exception as e:
+            logger.debug(f"[OpenAlexVerifier] Error querying title '{title}': {e}")
+            return None

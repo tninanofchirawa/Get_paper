@@ -23,16 +23,16 @@ if hasattr(sys.stderr, "reconfigure"):
         pass
 
 from config import cfg
-from database import db
+from core.database import db
 from services.cache.cleaner import purge_stale_cache, purge_nightly_cache
 from harvester.pipeline import AsyncHarvestingPipeline
 from verifier.dual_branch import DualBranchVerifier
-from analyzer import PaperAnalyzer
-from excel_builder import StandardizedExcelBuilder
-from csv_builder import StandardizedCsvBuilder
-from batch_runner import ResilientBatchRunner
-from drive_sync import drive_client
-from email_service import email_dispatcher
+from core.analyzer import PaperAnalyzer
+from utils.excel_builder import StandardizedExcelBuilder
+from utils.csv_builder import StandardizedCsvBuilder
+from core.batch_runner import ResilientBatchRunner
+from services.drive import drive_client
+from services.notifications import email_dispatcher
 
 
 async def run_spontaneous(

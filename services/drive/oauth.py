@@ -9,6 +9,7 @@ consuming personal drive quota rather than the service account's zero-byte quota
 
 import os
 import logging
+from pathlib import Path
 from typing import Optional, List, Any
 
 logger = logging.getLogger("DriveOAuth")
@@ -47,6 +48,41 @@ def load_user_oauth_credentials(
 
     scopes = scopes or DEFAULT_OAUTH_SCOPES
     creds = None
+    base_dir = Path(__file__).resolve().parent.parent.parent
+
+    # Dynamic resolution for token_path across project root and working directory
+    resolved_token_path = token_path
+    if not os.path.exists(resolved_token_path):
+        for candidate in [
+            str(base_dir / token_path),
+            str(base_dir / "token.json"),
+            str(base_dir / "Token.json"),
+            token_path,
+            "token.json",
+            "Token.json"
+        ]:
+            if os.path.exists(candidate):
+                resolved_token_path = candidate
+                break
+    token_path = resolved_token_path
+
+    # Dynamic resolution for credentials_path across project root and working directory
+    resolved_cred_path = credentials_path
+    if not os.path.exists(resolved_cred_path):
+        for candidate in [
+            str(base_dir / credentials_path),
+            str(base_dir / "credentials.json"),
+            str(base_dir / "Credential.json"),
+            str(base_dir / "credentials_oauth.json"),
+            credentials_path,
+            "credentials.json",
+            "Credential.json",
+            "credentials_oauth.json"
+        ]:
+            if os.path.exists(candidate):
+                resolved_cred_path = candidate
+                break
+    credentials_path = resolved_cred_path
 
     # Step 1: Check for existing token.json
     if os.path.exists(token_path):
@@ -63,9 +99,10 @@ def load_user_oauth_credentials(
             try:
                 logger.info("[DriveOAuth] Refreshing expired access token via refresh_token...")
                 creds.refresh(Request())
-                with open(token_path, "w", encoding="utf-8") as f:
+                save_dest = token_path if os.path.isabs(token_path) else str(base_dir / "token.json")
+                with open(save_dest, "w", encoding="utf-8") as f:
                     f.write(creds.to_json())
-                logger.info(f"[DriveOAuth] Successfully refreshed and persisted tokens to '{token_path}'.")
+                logger.info(f"[DriveOAuth] Successfully refreshed and persisted tokens to '{save_dest}'.")
             except Exception as e:
                 logger.warning(f"[DriveOAuth] Token refresh failed: {e}")
                 creds = None
@@ -76,14 +113,26 @@ def load_user_oauth_credentials(
     if not creds and allow_interactive and os.path.exists(credentials_path):
         try:
             print("\n🌐 [Google Drive OAuth] Initiating User Authentication Flow...")
+            print(f"  Using OAuth client secret from: '{credentials_path}'")
             print("  Opening browser window to authenticate your personal Google account...")
             flow = InstalledAppFlow.from_client_secrets_file(credentials_path, scopes)
             creds = flow.run_local_server(port=0)
-            with open(token_path, "w", encoding="utf-8") as f:
+            save_dest = token_path if os.path.isabs(token_path) else str(base_dir / "token.json")
+            with open(save_dest, "w", encoding="utf-8") as f:
                 f.write(creds.to_json())
-            print(f"  ✅ [Google Drive OAuth] Authentication successful! Saved to '{token_path}'.\n")
+            print(f"  ✅ [Google Drive OAuth] Authentication successful! Saved to '{save_dest}'.\n")
         except Exception as e:
             logger.error(f"[DriveOAuth] InstalledAppFlow failed: {e}")
             creds = None
 
     return creds
+
+
+if __name__ == "__main__":
+    import sys
+    print("🚀 [OAuth CLI Runner] Starting one-time Google Account login...")
+    c = load_user_oauth_credentials(allow_interactive=True)
+    if c and c.valid:
+        print("🎉 Authentication successful! 'token.json' generated.")
+    else:
+        print("❌ Authentication was not completed.")

@@ -98,3 +98,67 @@ class CrossrefClient:
             logger.warning(f"[Crossref] verify_doi failed for '{doi}': {e}")
             self.circuit_breaker.record_failure(None, str(e))
             return None
+
+    def verify_title(self, title: str) -> Optional[Dict[str, Any]]:
+        """Verifies bibliographic metadata for a title against Crossref REST API."""
+        if not title or self.circuit_breaker.is_tripped():
+            return None
+
+        clean_title = title.strip()
+        url = f"{self.BASE_URL}?query.bibliographic={urllib.parse.quote(clean_title)}&rows=1"
+
+        self.limiter.acquire()
+
+        def _do_request():
+            return self.session.get(url, headers=self.get_headers(), timeout=cfg.DEFAULT_TIMEOUT)
+
+        try:
+            resp = execute_with_429_retry(
+                request_fn=_do_request,
+                max_retries=cfg.MAX_RETRIES,
+                service_name="Crossref Bibliographic"
+            )
+
+            if resp is None or resp.status_code != 200:
+                if resp is None:
+                    self.circuit_breaker.record_failure(None, "Connection timeout")
+                return None
+
+            items = resp.json().get("message", {}).get("items", [])
+            if not items:
+                return None
+
+            item = items[0]
+            titles = item.get("title", [])
+            matched_title = titles[0] if titles else ""
+
+            from harvester.models import clean_matching_title
+            from difflib import SequenceMatcher
+            s1 = clean_matching_title(clean_title)
+            s2 = clean_matching_title(matched_title)
+            ratio = SequenceMatcher(None, s1, s2).ratio()
+            if ratio < 0.65:
+                return None
+
+            self.circuit_breaker.record_success()
+            containers = item.get("container-title", [])
+            venue = containers[0] if containers else ""
+            issn_list = item.get("ISSN", [])
+            doi = item.get("DOI", "")
+
+            issued = item.get("issued", {}).get("date-parts", [[]])[0]
+            year = str(issued[0]) if issued else ""
+
+            return {
+                "confirmed": True,
+                "title": matched_title,
+                "venue": venue,
+                "year": year,
+                "doi": doi,
+                "issn_list": issn_list,
+                "type": item.get("type", "")
+            }
+        except Exception as e:
+            logger.warning(f"[Crossref] verify_title failed for '{title}': {e}")
+            self.circuit_breaker.record_failure(None, str(e))
+            return None

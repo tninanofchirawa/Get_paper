@@ -9,6 +9,7 @@ from services.notifications.mailgun_dispatcher import send_mailgun_email
 from services.notifications.sendgrid_dispatcher import send_sendgrid_email
 from services.notifications.imap_listener import ImapInboxReader, imap_reader
 from services.notifications.dispatcher import EmailDispatcher, email_dispatcher
+from services.notifications.mailer import Mailer, mailer
 from services.notifications.templates import wrap_html_container, get_morning_questionnaire_template
 
 __all__ = [
@@ -22,6 +23,8 @@ __all__ = [
     "imap_reader",
     "EmailDispatcher",
     "email_dispatcher",
+    "Mailer",
+    "mailer",
     "wrap_html_container",
     "get_morning_questionnaire_template",
 ]

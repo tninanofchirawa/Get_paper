@@ -7,13 +7,14 @@ import os
 import unittest
 from pathlib import Path
 
+from config import cfg
 from batch_runner import ResilientBatchRunner
 from database import db
 
 
 class TestBatchRunner(unittest.TestCase):
     def setUp(self):
-        self.test_dir = "output/test_batch_dir"
+        self.test_dir = os.path.join(cfg.OUTPUT_DIR, "test_batch_dir")
         os.makedirs(self.test_dir, exist_ok=True)
 
         # Create 4 test files: 3 valid, 1 corrupted
@@ -34,8 +35,13 @@ class TestBatchRunner(unittest.TestCase):
         with open(self.file4, "w", encoding="utf-8") as f:
             f.write("Title,DOI\nPaper Four,10.1000/4\n")
 
+        with db.get_connection() as conn:
+            conn.execute("DELETE FROM file_queue WHERE run_id = 'test_batch_run_4files';")
+
     def tearDown(self):
         import shutil
+        with db.get_connection() as conn:
+            conn.execute("DELETE FROM file_queue WHERE run_id = 'test_batch_run_4files';")
         if os.path.exists(self.test_dir):
             try:
                 shutil.rmtree(self.test_dir)

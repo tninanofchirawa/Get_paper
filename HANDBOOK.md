@@ -66,6 +66,7 @@ Welcome to the definitive engineering manual and user handbook for the **Unified
    - [Scenario C: Google Drive HttpError 403 Storage Quota Exceeded](#scenario-c-google-drive-httperror-403-storage-quota-exceeded)
    - [Scenario D: SMTP Authentication Rejection (Error 535)](#scenario-d-smtp-authentication-rejection-error-535)
    - [Scenario E: Inbound Email Formatting & Syntax Errors](#scenario-e-inbound-email-formatting--syntax-errors)
+   - [Scenario F: Module Migration & Path Resolution After Structural Consolidation](#scenario-f-module-migration--path-resolution-after-structural-consolidation)
 12. [⚙️ Production Deployment & Headless Daemon Operations](#12-️-production-deployment--headless-daemon-operations)
    - [Linux Systemd Service Setup](#linux-systemd-service-setup)
    - [Windows Task Scheduler & Background Daemon](#windows-task-scheduler--background-daemon)
@@ -136,83 +137,263 @@ flowchart TD
 
 ## 2. 📁 Modular Directory Architecture
 
-The codebase adheres strictly to the **Single-Responsibility Principle (SRP)**. Monolithic files have been decomposed into isolated packages and client modules:
+The repository adheres strictly to the **Single-Responsibility Principle (SRP)**, modular clustering, and hierarchical directory nesting. Single-purpose scripts scattered across top-level locations have been organized into purpose-built packages (`core/`, `utils/`, `services/`, `scripts/maintenance/`, `scripts/audit/`), while all runtime data and volatile files have been nested under a unified `storage/` namespace.
 
-```
+Full backward compatibility is maintained via lightweight root shims (`analyzer.py`, `batch_runner.py`, `database.py`, `csv_builder.py`, `excel_builder.py`, `clean.ps1`, `test_email.py`, `cache_cleaner.py`), ensuring that legacy automated routines, scheduled tasks, and command-line scripts run without breakage.
+
+### 2.1 Complete Repository ASCII File Tree
+
+```text
 The_Paper_Getter/
-├── .env                              # Production credentials (S2_API_KEY, SMTP, Drive) - Never committed
+├── .env                              # Production credentials & API keys (Never committed to VCS)
 ├── .env.example                      # Template configuration with all parameter placeholders
-├── .gitignore                        # Git exclusion rules (.env, *.db, service_account.json, token.json, .venv/)
-├── clean.ps1                         # PowerShell zero-dependency artifact & cache purger
+├── .gitignore                        # Hardened git exclusion rules (secrets, venvs, storage outputs/caches)
+├── clean.ps1                         # Root convenience launcher delegating to scripts/maintenance/clean.ps1
+├── analyzer.py                       # Root backward-compatibility shim -> core.analyzer
+├── batch_runner.py                   # Root backward-compatibility shim -> core.batch_runner
+├── cache_cleaner.py                  # Root backward-compatibility shim -> scripts.maintenance.cache_cleaner
+├── credentials.json                  # Google Cloud Desktop App OAuth 2.0 Client Secrets
+├── csv_builder.py                    # Root backward-compatibility shim -> utils.csv_builder
+├── database.py                       # Root backward-compatibility shim -> core.database
+├── drive_sync.py                     # Google Drive CLI sync & OAuth helper -> services.drive
+├── email_service.py                  # Root backward-compatibility shim -> services.notifications
+├── excel_builder.py                  # Root backward-compatibility shim -> utils.excel_builder
+├── main.py                           # Primary CLI entrypoint & interactive 15-question intake engine
+├── README.md                         # Project overview and high-level quick start guide
+├── requirements.txt                  # Python dependencies (pandas, openpyxl, google-api-python-client, etc.)
+├── run.py                            # Non-interactive CLI runner wrapper
+├── scheduler.py                      # 3-Tier IST reminder daemon (07:30, 14:00, 21:00) & IMAP listener
+├── service_account.json              # Optional Google Workspace Service Account JSON credentials
+├── test_email.py                     # Root backward-compatibility shim -> scripts.audit.test_email
 ├── config/                           # Centralized Configuration & Environment Loader
 │   ├── __init__.py                   # Package re-exports: cfg, PipelineConfig, constants
-│   ├── env.py                        # .env loading logic and candidate path resolution
 │   ├── constants.py                  # Rate limits, operational quotas, timeouts, TTL values, MAX_CACHE_SIZE_MB
-│   └── settings.py                   # PipelineConfig dataclass, singleton 'cfg', headers generator
+│   ├── env.py                        # .env dynamic candidate path loader keyed from BASE_DIR
+│   └── settings.py                   # PipelineConfig dataclass, singleton 'cfg', dynamic storage directory resolution
+├── core/                             # Orchestration Engines, Batch Processing & Persistence
+│   ├── __init__.py                   # Core re-exports: PaperAnalyzer, ResilientBatchRunner, DatabaseManager, db
+│   ├── analyzer.py                   # 37-Taxonomy Fuzzy ML Classifier & NLP heuristic classifier
+│   ├── batch_runner.py               # Deterministic alphabetical file queue & failure boundary runner
+│   ├── database.py                   # SQLite persistence engine (pipeline.db, daily_state, file_queue)
+│   └── models.py                     # Canonical Paper dataclass & title/DOI canonical sanitizers
+├── data/                             # Authoritative Local Master Databases
+│   ├── pipeline.db                   # SQLite runtime transactional database (WAL mode)
+│   ├── scopus_source_list.xlsx       # Elsevier Scopus master source title/ISSN database (44,000+ journals)
+│   └── wos_master_journal_list.csv   # Clarivate Web of Science master journal list (24,000+ journals)
 ├── harvester/                        # Multi-Provider Asynchronous Accumulator
-│   ├── __init__.py                   # Package exports: harvesters, distributor, pipeline
-│   ├── base.py                       # BaseAsyncHarvester with rate limiting and retry logic
-│   ├── arxiv.py                      # arXiv Atom XML harvester
+│   ├── __init__.py                   # Harvester re-exports: AsyncHarvestingPipeline, ActiveQueryDistributor
+│   ├── arxiv.py                      # arXiv Atom XML harvester (3.1s polite delay)
+│   ├── base.py                       # BaseAsyncHarvester with rate limiting and exponential backoff
 │   ├── core_ac.py                    # CORE API v3 search harvester
-│   ├── crossref.py                   # Crossref REST harvester
+│   ├── crossref.py                   # Crossref REST harvester (50 req/s polite pool)
 │   ├── deduplication.py              # Exact canonical DOI + 90% fuzzy SequenceMatcher deduplication
-│   ├── distributor.py                # ActiveQueryDistributor: round-robin provider rotation & 5.5s dynamic cooldown
+│   ├── distributor.py                # ActiveQueryDistributor: round-robin provider rotation & 5.5s cooldown
 │   ├── models.py                     # Paper dataclass with standardized analytical attributes
-│   ├── openalex.py                   # OpenAlex REST harvester
+│   ├── openalex.py                   # OpenAlex REST harvester (10 req/s polite pool)
 │   ├── pipeline.py                   # AsyncHarvestingPipeline (Active round-robin query accumulator)
 │   └── semantic_scholar.py           # Semantic Scholar harvester (1 req/s global token-bucket)
-├── scripts/                          # Maintenance & Footprint Utilities
-│   ├── audit_footprint.py            # Python single-pass disk usage & directory footprint profiler
-│   ├── audit_footprint.ps1           # PowerShell wrapper for footprint audit
-│   └── clean.py                      # Safe zero-dependency cache and artifact cleaner (--dry-run support)
-├── services/
-│   ├── academic/                     # Isolated Academic API Clients
-│   │   ├── __init__.py               # Re-exports: SemanticScholarClient, CrossrefClient, etc.
-│   │   ├── semantic_scholar.py       # S2 Graph API client (Strict 1 req/s + 429 exponential backoff)
-│   │   ├── crossref.py               # Crossref REST client (50 req/s polite pool + mailto header)
-│   │   ├── openalex.py               # OpenAlex API client (10 req/s + CC0 registry metadata)
-│   │   └── arxiv.py                  # arXiv Atom XML client (3.0s polite delay + preprint parsing)
-│   ├── cache/                        # Caching Layer & Automated Maintenance
-│   │   ├── __init__.py               # Re-exports: CacheManager, purge_stale_cache, purge_nightly_cache
-│   │   ├── ttl.py                    # CacheTTLPolicy (48h verification TTL, 24h query TTL)
+├── scripts/                          # Diagnostic Utilities, Maintenance Jobs & Profilers
+│   ├── __init__.py                   # Package marker for scripts namespace
+│   ├── audit_footprint.py            # Backward-compatibility wrapper -> scripts.audit.audit_footprint
+│   ├── audit_footprint.ps1           # Backward-compatibility launcher -> scripts/audit/audit_footprint.ps1
+│   ├── clean.py                      # Backward-compatibility wrapper -> scripts.maintenance.clean
+│   ├── audit/                        # System Auditing & Inspection Utilities
+│   │   ├── __init__.py               # Audit package marker
+│   │   ├── audit_footprint.py        # Single-pass filesystem disk profiler (Top 10 dirs/files, culprit breakdown)
+│   │   ├── audit_footprint.ps1       # Zero-dependency PowerShell footprint profiler
+│   │   └── test_email.py             # Visual verification test dispatcher for rich HTML email templates
+│   └── maintenance/                  # Safe Maintenance, Purging & Cache Cleaners
+│       ├── __init__.py               # Maintenance package marker
+│       ├── cache_cleaner.py          # Cache life-cycle purging engine (00:00 purge & TTL eviction)
+│       ├── clean.ps1                 # Zero-dependency PowerShell artifact cleaner
+│       └── clean.py                  # Zero-dependency artifact cleaner (--dry-run support)
+├── services/                         # Isolated Domain & External Integration Services
+│   ├── academic/                     # Academic Aggregator Clients & Parsers
+│   │   ├── __init__.py               # Re-exports: SemanticScholarClient, OpenAlexClient, CrossrefClient, etc.
+│   │   ├── arxiv.py                  # arXiv Atom XML API client (3.0s delay + preprint parsing)
+│   │   ├── crossref.py               # Crossref REST API client (50 req/s + polite mailto header)
+│   │   ├── doaj.py                   # Directory of Open Access Journals (DOAJ) REST client
+│   │   ├── openalex.py               # OpenAlex Works API client (10 req/s + CC0 registry metadata)
+│   │   └── semantic_scholar.py       # Semantic Scholar Graph API client (Strict 1 req/s cap)
+│   ├── cache/                        # Caching Layer, TTL Policies & Eviction Managers
+│   │   ├── __init__.py               # Re-exports: CacheManager, CacheTTLPolicy, purge_stale_cache
+│   │   ├── cleaner.py                # Automated maintenance engine (00:00 midnight purge & LRU eviction)
 │   │   ├── manager.py                # CacheManager (Compact schema, LRU size cap to 30 MB)
-│   │   └── cleaner.py                # Automated maintenance engine (00:00 midnight purge & --clear-cache)
-│   ├── drive/                        # Google Drive Cloud Storage & Quota Management
-│   │   ├── __init__.py               # Re-exports: GoogleDriveClient, drive_client
-│   │   ├── client.py                 # Drive API v3 uploader (User OAuth 2.0 & Shared Drive supportsAllDrives)
-│   │   ├── oauth.py                  # User OAuth 2.0 flow (token.json + credentials.json for personal Drive)
-│   │   ├── quota.py                  # Pre-flight quota validation & storage mode diagnostics
-│   │   └── mime.py                   # MIME type detection and optional gzip compression
-│   └── notifications/                # Email Dispatch, IMAP Ingestion & Templates
-│       ├── __init__.py               # Re-exports: EmailDispatcher, email_dispatcher, imap_reader
-│       ├── tag_parser.py             # Resilient 15-tag regex configuration parser & boundary checks
-│       ├── templates.py              # HTML responsive email cards and plain-text templates
-│       ├── dispatcher.py             # High-level EmailDispatcher with fail-safe error handling
-│       ├── smtp_dispatcher.py        # Gmail SMTP transport with STARTTLS & MIME attachments
+│   │   └── ttl.py                    # CacheTTLPolicy (48h verification TTL, 24h query TTL)
+│   ├── drive/                        # Google Drive Cloud Upload & Quota Management
+│   │   ├── __init__.py               # Re-exports: GoogleDriveClient, DriveUploader, drive_client
+│   │   ├── auth.py                   # OAuth 2.0 authentication entrypoint & token loader
+│   │   ├── client.py                 # Drive API v3 client (supportsAllDrives=True, chunked upload)
+│   │   ├── mime.py                   # MIME type detection & gzip compression utilities
+│   │   ├── oauth.py                  # User OAuth 2.0 flow (Method 1: credentials.json -> token.json)
+│   │   ├── quota.py                  # Pre-flight quota check & 403 prevention diagnostics
+│   │   └── uploader.py               # Standardized drive uploader handler alias
+│   └── notifications/                # Email Dispatch, Alerting & IMAP Listener
+│       ├── __init__.py               # Re-exports: EmailDispatcher, Mailer, imap_reader
+│       ├── dispatcher.py             # High-level resilient EmailDispatcher with error boundaries
+│       ├── imap_listener.py          # IMAP inbox poller for incoming questionnaire responses
+│       ├── mailer.py                 # Mailer and alerting interface (alias to EmailDispatcher)
 │       ├── mailgun_dispatcher.py     # Mailgun REST API transport
 │       ├── sendgrid_dispatcher.py    # SendGrid v3 Web API transport
-│       └── imap_listener.py          # IMAP inbox poller for incoming questionnaire replies
-├── utils/                            # Shared Utilities & Decorators
-│   ├── __init__.py                   # Re-exports: TokenBucketRateLimiter, sanitizers, retries
-│   ├── rate_limiters.py              # TokenBucketRateLimiter & GLOBAL_SEMANTIC_SCHOLAR_LIMITER
-│   ├── retry_handlers.py             # execute_with_429_retry (HTTP 429 exponential backoff)
-│   └── converters.py                 # sanitize_doi, sanitize_title, clean_matching_title, clean_year
-├── verifier/                         # Multi-Source Academic Verification Engine
-│   ├── circuit_breaker.py            # Circuit breaker tripping on 401/403/429
-│   ├── dual_branch.py                # Concurrent ThreadPoolExecutor querying across all 7 sources
+│       ├── smtp_dispatcher.py        # Gmail SMTP transport with STARTTLS & MIME attachments
+│       ├── tag_parser.py             # 15-tag regex configuration parser & sanitizers
+│       └── templates.py              # Responsive HTML email templates & plain-text fallbacks
+├── storage/                          # Hierarchical Persistent & Runtime Storage Root
+│   ├── __init__.py                   # Storage package marker
+│   ├── cache/                        # Local response cache JSON dumps (paper_verification_cache.json)
+│   ├── input/                        # Input directory for batch candidate CSV files
+│   ├── logs/                         # Runtime diagnostic logs and daemon execution logs
+│   ├── output/                       # Standardized verified CSV and Excel spreadsheets
+│   └── temp/                         # Transient scratch files and chunked buffer streams
+├── utils/                            # Shared Utilities, Format Converters & Robustness Primitives
+│   ├── __init__.py                   # Re-exports: StandardizedCsvBuilder, StandardizedExcelBuilder, CircuitBreaker
+│   ├── circuit_breaker.py            # Circuit breaker tripping on consecutive failures (401/403/429)
+│   ├── converters.py                 # String sanitizers, title normalization, and DOI formatters
+│   ├── csv_builder.py                # Standardized Two-Tier UTF-8 BOM CSV builder (Rows 1-15 Header, Row 16+ Data)
+│   ├── excel_builder.py              # Standardized Production Excel workbook builder (Rows 1-10 Header, Row 11+ Data)
+│   ├── rate_limiters.py              # TokenBucketRateLimiter & AsyncRateLimiter primitives
+│   └── retry_handlers.py             # Exponential backoff retry decorators & HTTP 429 handlers
+├── verifier/                         # Multi-Source Academic Verification & Partitioning Architecture
+│   ├── __init__.py                   # Re-exports: TieredWorkloadVerifier, DualBranchVerifier
+│   ├── arxiv_verifier.py             # arXiv preprint search and verification
+│   ├── cache.py                      # Persistent JSON verification response cache (Compact schema)
+│   ├── circuit_breaker.py            # Local circuit breaker wrapper
+│   ├── crossref_verifier.py          # Crossref bibliographic & DOI matching
+│   ├── doaj_verifier.py              # DOAJ open access journal verification
+│   ├── dual_branch.py                # Concurrent ThreadPoolExecutor querying across institutional/open branches
+│   ├── ieee.py                       # IEEE Xplore REST verification client
+│   ├── local_db.py                   # In-memory O(1) hash matcher for Scopus/WoS source lists
+│   ├── local_matcher.py              # Fuzzy ISSN/Title matching algorithms
+│   ├── openalex_verifier.py          # OpenAlex Works API matching
 │   ├── scopus.py                     # Elsevier Scopus API client with token pool rotation
-│   ├── wos.py                        # Clarivate Web of Science client with token rotation
-│   ├── ieee.py                       # IEEE Xplore API client with token rotation
-│   └── cache.py                      # Persistent JSON verification response cache (Compact schema)
-├── analyzer.py                       # 32-Taxonomy Machine Learning classifier
-├── csv_builder.py                    # Standardized Two-Tier UTF-8 BOM CSV exporter (RFC 4180 compliant)
-├── excel_builder.py                  # Standardized Excel exporter (.xlsx with Rows 1-10 audit metadata)
-├── batch_runner.py                   # Deterministic alphabetical batch runner (Row 16 header autodetection)
-├── database.py                       # SQLite state storage (pipeline.db)
-├── scheduler.py                      # 3-tier IST reminder daemon (07:30, 14:00, 21:00) & IMAP listener
-├── main.py                           # Central CLI entrypoint and interactive terminal intake
-└── tests/                            # Automated Unit Test Suite (37 comprehensive tests)
+│   ├── semantic_scholar_verifier.py  # Semantic Scholar Graph API verifier
+│   ├── tiered_verifier.py            # TieredWorkloadVerifier (3-way N/3 partition & ring fallback queue)
+│   └── wos.py                        # Web of Science API client with token pool rotation
+└── tests/                            # Automated Unit & Integration Test Suite (59 comprehensive tests)
+    ├── __init__.py                   # Test suite package marker
+    ├── test_batch_runner.py          # Deterministic queue & error boundaries test
+    ├── test_csv_and_drive.py         # Two-Tier CSV layout & Drive OAuth test
+    ├── test_database_and_state.py    # SQLite daily state & WAL mode test
+    ├── test_email_and_cache.py       # Email tags, HTML templates & cache cleaner test
+    ├── test_excel_builder.py         # Standardized Excel layout test
+    ├── test_modular_services.py      # Isolated academic API clients test
+    ├── test_rate_limiter.py          # Token-bucket rate limiting test
+    ├── test_retry_handlers.py        # Exponential backoff & 429 retry test
+    ├── test_structure_consolidation.py # Verification of module clustering & storage hierarchy
+    └── test_tiered_verifier.py       # 3-way partitioning & ring fallback queue test
 ```
+
+---
+
+### 2.2 Module Responsibility Mapping
+
+Every directory and nested subfolder in the consolidated architecture has an explicit, non-overlapping architectural role.
+
+#### 1. `core/` (Orchestration, Batch Processing & Database State)
+- **Folder Purpose:** Encapsulates the core business logic, lifecycle execution engines, batch workers, and database transactions governing run histories and candidate records.
+- **Contained Modules:**
+  - `analyzer.py`: Executes 37-taxonomy Fuzzy Logic & ML classification, heuristic learning level grading, and keyword extraction.
+  - `batch_runner.py`: Implements `ResilientBatchRunner` for deterministic alphabetical file queue processing with individual try/except/finally boundaries preventing pipeline task drops.
+  - `database.py`: Implements `DatabaseManager` managing SQLite (`pipeline.db`) WAL mode persistence, daily state progression, conversation sessions, and run logs.
+  - `models.py`: Defines the canonical `Paper` dataclass and title/DOI sanitization helpers (`clean_matching_title`, `sanitize_doi`).
+- **Entry Points:** Core modules are accessed by the pipeline and can be tested or called directly via `from core import ...`.
+
+#### 2. `storage/` (Hierarchical Runtime & Persistent Storage)
+- **Folder Purpose:** Consolidates all transient, runtime, and output directories under a single parent namespace, eliminating root-level folder proliferation.
+- **Contained Sub-folders:**
+  - `storage/cache/`: Houses local JSON response caches (`paper_verification_cache.json`).
+  - `storage/output/`: Standard output destination for verified CSV datasets and Excel workbooks.
+  - `storage/logs/`: Destination for daemon logs, error traces, and execution telemetry.
+  - `storage/temp/`: Transient scratch area for stream buffers and temporary chunks.
+  - `storage/input/`: Directory where candidate CSV batches are deposited for batch processing.
+
+#### 3. `services/academic/` (Isolated Aggregator & Indexing Clients)
+- **Folder Purpose:** Provides single-purpose, polite API clients for external academic data providers, isolating network formatting, rate limits, and authentication.
+- **Contained Modules:**
+  - `semantic_scholar.py`: Graph API querying with 1 req/sec strict rate-limiting and 429 retry backoff.
+  - `openalex.py`: Works API client leveraging the polite pool mailto header (10 req/sec cap).
+  - `crossref.py`: Bibliographic and DOI search client (50 req/sec polite pool cap).
+  - `arxiv.py`: Atom XML query client enforcing 3.1-second sequential delay.
+  - `doaj.py`: Directory of Open Access Journals REST client for verifying indexed OA publication venues.
+
+#### 4. `services/drive/` (Google Drive Synchronization & Auth)
+- **Folder Purpose:** Handles cloud asset synchronization, quota management, and pre-flight validation to prevent HTTP 403 quota errors.
+- **Contained Modules:**
+  - `auth.py`: Centralized authentication loader wrapping OAuth 2.0 flows.
+  - `oauth.py`: Implements Method 1 Desktop OAuth 2.0 (`credentials.json` -> `token.json`) for personal `@gmail.com` accounts.
+  - `client.py`: High-level `GoogleDriveClient` with chunked resumable streaming and `supportsAllDrives=True`.
+  - `quota.py`: Pre-flight verification routines inspecting target folder IDs, permissions, and service account quotas.
+  - `mime.py`: MIME type detection and optional gzip payload compression.
+  - `uploader.py`: Alias interface for standardized drive uploading workflows.
+
+#### 5. `services/notifications/` (Email Dispatch, IMAP & Templates)
+- **Folder Purpose:** Manages the 100% free Gmail communication lifecycle, parsing incoming configuration tags and rendering rich responsive HTML notifications.
+- **Contained Modules:**
+  - `mailer.py`: Clean alerting interface re-exporting `EmailDispatcher` as `Mailer`.
+  - `dispatcher.py`: High-level dispatch controller with fail-safe error boundaries.
+  - `smtp_dispatcher.py`: Gmail SMTP transport with STARTTLS, MIME attachments, and credential validation.
+  - `mailgun_dispatcher.py`: Fallback transport for Mailgun REST API.
+  - `sendgrid_dispatcher.py`: Fallback transport for SendGrid v3 API.
+  - `imap_listener.py`: Background poller reading user configuration emails over IMAP.
+  - `tag_parser.py`: Robust regex parser extracting the 15 configuration tags with strict type coercion.
+  - `templates.py`: HTML container wrappers, responsive email cards, and plain-text fallbacks.
+
+#### 6. `services/cache/` (Cache Maintenance & Eviction)
+- **Folder Purpose:** Enforces cache lifecycle constraints, size ceilings, and scheduled purges.
+- **Contained Modules:**
+  - `manager.py`: `CacheManager` with SHA-256 keying and 30 MB size-capped LRU eviction.
+  - `cleaner.py`: Automated 00:00 IST midnight purge engine and `--clear-cache` handlers.
+  - `ttl.py`: `CacheTTLPolicy` defining 48-hour verification TTL and 24-hour query TTL.
+
+#### 7. `utils/` (Converters, Formatters & Robustness Primitives)
+- **Folder Purpose:** Shared formatting tools, mathematical rate limiters, resilience decorators, and spreadsheet builders.
+- **Contained Modules:**
+  - `csv_builder.py`: Implements `StandardizedCsvBuilder` for production two-tier UTF-8 with BOM CSVs (Rows 1-15 header block, Row 16+ data).
+  - `excel_builder.py`: Implements `StandardizedExcelBuilder` generating styled `.xlsx` workbooks with Rows 1-10 audit blocks.
+  - `circuit_breaker.py`: Circuit breaker pattern preventing API hammering upon consecutive errors.
+  - `rate_limiters.py`: Token-bucket and async rate limiters enforcing polite pool limits.
+  - `retry_handlers.py`: Exponential backoff decorators handling transient network drops and HTTP 429 throttles.
+  - `converters.py`: DOI sanitizers, title cleaners, and year formatters.
+
+#### 8. `scripts/maintenance/` & `scripts/audit/` (Operational Scripts)
+- **Folder Purpose:** Isolated diagnostic, maintenance, and administrative scripts separated from production application code.
+- **Contained Modules:**
+  - `scripts/maintenance/clean.py`: Zero-dependency safe artifact cleaner (`--dry-run` supported).
+  - `scripts/maintenance/clean.ps1`: Native PowerShell cleanup script for Windows environments.
+  - `scripts/maintenance/cache_cleaner.py`: Standalone CLI launcher for manual or cron-driven cache purging.
+  - `scripts/audit/audit_footprint.py`: Single-pass disk usage and folder profiler identifying Top 10 space consumers.
+  - `scripts/audit/audit_footprint.ps1`: PowerShell wrapper for disk footprint inspection.
+  - `scripts/audit/test_email.py`: Visual verification tool dispatching sample HTML cards across all intake templates.
+
+#### 9. Top-Level Entry Points
+- **`main.py`**: Central CLI entry point for spontaneous harvests, batch jobs (`--all`), scheduler execution (`--scheduler`), cache flushes (`--clear-cache`), and test execution (`--test`).
+- **`run.py`**: Non-interactive command-line runner wrapper.
+- **`scheduler.py`**: Persistent 3-tier IST reminder daemon and IMAP polling loop.
+- **`drive_sync.py`**: Standalone Drive upload test utility and one-time OAuth 2.0 browser authorization runner (`python drive_sync.py --login`).
+
+---
+
+### 2.3 Migration & Backward-Compatibility Guide
+
+To ensure zero downtime and prevent broken command-line aliases, the consolidation introduced backward-compatibility shims at the project root:
+
+| Previous Root Location | New Modular Location | Backward Compatibility Status | Recommended New Import / CLI Invocation |
+|:---|:---|:---|:---|
+| `analyzer.py` | `core/analyzer.py` | ✅ Root shim re-exports `core.analyzer` | `from core.analyzer import PaperAnalyzer` |
+| `batch_runner.py` | `core/batch_runner.py` | ✅ Root shim re-exports `core.batch_runner` | `from core.batch_runner import ResilientBatchRunner` |
+| `database.py` | `core/database.py` | ✅ Root shim re-exports `core.database` | `from core.database import DatabaseManager, db` |
+| `csv_builder.py` | `utils/csv_builder.py` | ✅ Root shim re-exports `utils.csv_builder` | `from utils.csv_builder import StandardizedCsvBuilder` |
+| `excel_builder.py` | `utils/excel_builder.py` | ✅ Root shim re-exports `utils.excel_builder` | `from utils.excel_builder import StandardizedExcelBuilder` |
+| `cache_cleaner.py` | `scripts/maintenance/cache_cleaner.py` | ✅ Root shim delegates to `services.cache.cleaner` | `python scripts/maintenance/cache_cleaner.py` |
+| `clean.ps1` | `scripts/maintenance/clean.ps1` | ✅ Root wrapper launches `scripts/maintenance/clean.ps1` | `.\scripts\maintenance\clean.ps1` or `.\clean.ps1` |
+| `clean.py` | `scripts/maintenance/clean.py` | ✅ `scripts/clean.py` wrapper delegates to maintenance | `python scripts/maintenance/clean.py` |
+| `audit_footprint.py` | `scripts/audit/audit_footprint.py` | ✅ `scripts/audit_footprint.py` delegates to audit | `python scripts/audit/audit_footprint.py` |
+| `test_email.py` | `scripts/audit/test_email.py` | ✅ Root shim delegates to `scripts.audit.test_email` | `python scripts/audit/test_email.py` |
+| `output/` | `storage/output/` | ✅ `cfg.OUTPUT_DIR` resolves to `storage/output/` | Checked via `cfg.OUTPUT_DIR` |
+| `cache/` | `storage/cache/` | ✅ `cfg.CACHE_DIR` resolves to `storage/cache/` | Checked via `cfg.CACHE_DIR` |
+| `logs/` | `storage/logs/` | ✅ `cfg.LOGS_DIR` resolves to `storage/logs/` | Checked via `cfg.LOGS_DIR` |
+| `temp/` | `storage/temp/` | ✅ `cfg.TEMP_DIR` resolves to `storage/temp/` | Checked via `cfg.TEMP_DIR` |
+| `input/` | `storage/input/` | ✅ `cfg.INPUT_DIR` resolves to `storage/input/` | Checked via `cfg.INPUT_DIR` |
 
 ---
 
@@ -231,7 +412,7 @@ Every interactive prompt in `main.py` and email tag in `email_service.py` serves
 - **Default / Recommended Behavior:**
   Pressing Enter defaults to `Run_YYYYMMDD_HHMMSS` (e.g., `Run_20261029_083000`). If received via scheduled morning email, it defaults to `Run_YYYYMMDD_01`.
 - **Follow-Up Handling & Downstream Branching:**
-  1. Primary CSV output is written to: `output/{run_name}.csv`.
+  1. Primary CSV output is written to: `storage/output/{run_name}.csv`.
   2. Uploaded to Google Drive with `custom_filename="{run_name}.csv"`.
   3. Formatted into the email subject: `✅ [Harvest Complete] {run_name} — {count} Papers Verified & Synced!`.
   4. Stored as the primary key in SQLite: `db.log_run_start(run_id, run_name, run_config)`.
@@ -501,26 +682,32 @@ python scripts/audit_footprint.py
 The audit scans the workspace in a single $O(N)$ pass, displaying:
 - Top 10 largest subdirectories ranked by megabytes.
 - Top 10 largest individual files.
-- Categorized breakdown: Core Project Source Code, Virtual Environment (`.venv`), Git History (`.git`), Runtime Output (`output/`), and Transient Cache (`cache/`, `temp/`).
+- Categorized breakdown: Core Project Source Code, Virtual Environment (`.venv`), Git History (`.git`), Runtime Output (`storage/output/`), and Transient Cache (`storage/cache/`, `storage/temp/`).
 
 ### Zero-Dependency Safe Artifact Purger (`clean.py` / `clean.ps1`)
 To safely wipe build artifacts, bytecode, test files, and stale logs without deleting virtual environments or user `.env` files:
 ```bash
 # Dry run preview (no files removed)
+python scripts/maintenance/clean.py --dry-run
+# Or backward-compatible wrapper:
 python scripts/clean.py --dry-run
 
 # Live purge
+python scripts/maintenance/clean.py
+# Or backward-compatible wrapper:
 python scripts/clean.py
 
-# Or native PowerShell utility
+# Native PowerShell utility
+.\scripts\maintenance\clean.ps1 -DryRun
+# Or root convenience launcher:
 .\clean.ps1 -DryRun
 .\clean.ps1
 ```
 Items safely purged include:
 - `__pycache__/` and `*.pyc` bytecode files.
-- `temp/`, `.pytest_cache/`, `.mypy_cache/`.
+- `storage/temp/`, `.pytest_cache/`, `.mypy_cache/`.
 - Stale SQLite temporary files (`*.db-wal`, `*.db-shm`).
-- Stale CSV/XLSX exports in `output/` (optional `--include-output`).
+- Stale CSV/XLSX exports in `storage/output/` (optional `--include-output`).
 - Dangling test artifact files (`test_*.csv`, `test_*.xlsx`).
 
 ---
@@ -528,38 +715,126 @@ Items safely purged include:
 ## 7. ☁️ Google Drive Cloud Storage & 403 Storage Quota Resolution
 
 ### Root Cause of the 403 Storage Quota Error
-When uploading files to Google Drive, developers often encounter:
-```
-HttpError 403: The user's Drive storage quota has been exceeded.
+When uploading files to Google Drive with standard service account keys, developers encounter:
+```text
+HttpError 403: "The user's Drive storage quota has been exceeded."
 "reason": "storageQuotaExceeded"
 ```
-**Why this occurs:** A Google Cloud **Service Account has 0 bytes of personal drive storage**. Even if you share a personal Google Drive folder (`@gmail.com`) with the service account email, whenever an upload is performed using service account credentials, Google attempts to assign **file ownership to the service account**. Because the service account has a 0-byte quota, Google immediately rejects the request with `storageQuotaExceeded`.
+
+#### 🧠 The Technical Explanation:
+- A Google Cloud **Service Account** (a bot account ending in `@...iam.gserviceaccount.com`) is provisioned by Google with **exactly 0 bytes (0 KB)** of Google Drive storage space.
+- Even if you create a folder on your personal Google Drive (`@gmail.com`) and share it with the service account bot email as an Editor, whenever the bot uploads a file, Google assigns **file ownership to the service account**.
+- Because the service account has a 0-byte quota, Google immediately blocks the upload with `storageQuotaExceeded (403)`.
 
 ---
 
-### Architectural Solutions
+### Architectural Solutions: Two Approved Methods
 
 The pipeline supports two robust solutions depending on whether you are using a personal `@gmail.com` account or an organizational Google Workspace domain:
 
-#### Method 1: User OAuth 2.0 Credentials (Personal @gmail.com Drives)
+```
+                                [Choose Your Google Drive Setup]
+                                                │
+                     ┌──────────────────────────┴──────────────────────────┐
+                     ▼                                                     ▼
+    [Method 1: Personal @gmail.com Drive]                 [Method 2: Google Workspace Domain]
+     • Switch to User OAuth 2.0                            • Keep Service Account JSON
+     • Place 'credentials.json' in root                    • Target Google Workspace Shared Drive
+     • First run generates 'token.json'                    • Add Service Account as Content Manager
+     • Uses your 15 GB+ personal quota 🚀                  • Files consume organizational pool
+```
+
+---
+
+### 📘 Method 1: The Complete Dummy-Proof Setup Guide (Personal @gmail.com Drives - Recommended)
+
 *Best for researchers and developers using standard personal Google accounts.*
 
-Instead of service account credentials, authenticate as yourself once via OAuth 2.0. The uploaded files will then consume your personal Google Drive storage space.
+Instead of pretending to be a bot with 0 storage, we switch your pipeline to **OAuth 2.0 (User Credentials)**. This tells Google: *"Hey, this script is uploading on behalf of my personal Google account."* Your personal Google Drive has 15 GB+ of space, so files upload smoothly without quota issues!
 
-1. **Obtain OAuth Client Credentials:**
-   - Open [Google Cloud Console](https://console.cloud.google.com/).
-   - Navigate to **APIs & Services** $\rightarrow$ **Credentials**.
-   - Click **Create Credentials** $\rightarrow$ **OAuth client ID**.
-   - Application Type: **Desktop app**. Name: `PaperGetter`.
-   - Download the client configuration JSON and save it in the project root as `credentials.json`.
-2. **Authorize via Python Flow:**
-   [`services/drive/oauth.py`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/services/drive/oauth.py) automates the authorization flow, launching a local browser listener to approve the `https://www.googleapis.com/auth/drive.file` scope and caching access/refresh tokens in `token.json`:
-   ```bash
-   pip install google-auth-oauthlib google-auth-httplib2 google-api-python-client
-   ```
-3. Once generated, subsequent runs automatically refresh tokens in the background without prompting.
+#### 📍 Phase 1: Configure the Google Cloud Consent Screen
+1. Open your browser and go to [Google Cloud Console](https://console.cloud.google.com/).
+2. In the top bar, ensure your project (e.g., `Paper-Harvester-Drive`) is selected.
+3. Open the left sidebar menu (`☰` in the top left) and go to:
+   👉 **APIs & Services** $\rightarrow$ **OAuth consent screen** (or **Google Auth Platform**).
+4. **Select Audience / User Type:**
+   - Choose **External** (allows you to test with your personal Gmail address).
+   - Click **Create** / **Next**.
+5. **Fill in App Information:**
+   - **App name:** `Paper getter`
+   - **User support email:** Select your Gmail from the dropdown.
+   - **Developer contact email:** Type your personal Gmail address.
+   - Click **Save and Continue**.
+6. **Scopes (Permissions):**
+   - Click **Add or Remove Scopes**.
+   - In the filter box, search for `drive.file`.
+   - Check the box for:
+     `https://www.googleapis.com/auth/drive.file` (*See, edit, create, and delete only the specific Google Drive files you use with this app*).
+   - Click **Update**, then **Save and Continue**.
+7. **Test Users (⚠️ CRITICAL STEP — DO NOT SKIP):**
+   - Since your app is in "Testing" mode, Google blocks everyone by default.
+   - Click **+ Add Users**.
+   - Type your exact personal Google email address (the one whose Drive you want to upload to).
+   - Click **Add**, then **Save and Continue**.
+   - Click **Back to Dashboard**.
 
-#### Method 2: Google Workspace Shared Drive (Team Drive)
+#### 📍 Phase 2: Create and Download `credentials.json`
+1. Go to the left sidebar menu and click **Credentials** (or **Clients**).
+2. Click the blue **`+ Create Credentials`** button at the top and select **OAuth client ID**.
+3. In the setup form:
+   - **Application type:** Select **Desktop app**.
+   - **Name:** `Paper getter`
+   - Click **Create**.
+4. Once created, click on `Paper getter` to open its details.
+5. In the **Client secrets** section at the bottom right:
+   - Click the **Download icon** (the arrow pointing down into a tray).
+6. **Rename and place the file:**
+   - Rename the downloaded JSON file to exactly:
+     ```text
+     credentials.json
+     ```
+   - Move `credentials.json` directly into your project's root folder (`The_Paper_Getter`).
+
+#### 📍 Phase 3: Install Required Python Packages
+Ensure the required Google OAuth and API client libraries are installed in your virtual environment:
+```bash
+pip install google-auth-oauthlib google-auth-httplib2 google-api-python-client
+```
+
+#### 📍 Phase 4: How Authentication Works in the Code
+[`services/drive/oauth.py`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/services/drive/oauth.py) and [`services/drive/client.py`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/services/drive/client.py) automate authentication:
+1. **On First Run:** If `token.json` is missing, running `python drive_sync.py` or the pipeline automatically launches your default browser for a one-time Google Account approval.
+2. **Token Storage:** Once approved, the access and refresh tokens are persisted to `token.json` in the project root.
+3. **Subsequent Runs:** The client loads `token.json` and automatically refreshes tokens in the background without opening the browser again!
+
+#### 🚀 What Happens on Your First Run?
+When you authenticate for the first time:
+1. **A browser tab will automatically pop open** asking you to choose your Google Account.
+2. **Select the Gmail address** you added as a **Test User** in Phase 1.
+3. **Google Security Warning Screen:**
+   - You will see: *"Google hasn't verified this app"*.
+   - **Do not panic!** This is standard for private developer projects.
+   - Click **Advanced** (small link in the lower left).
+   - Click **Go to Paper getter (unsafe)**.
+4. Click **Continue** to grant the app permission to upload files to your Drive.
+5. The browser will confirm: *"The authentication flow has completed. You may close this window."*
+6. The script creates **`token.json`** in your project folder, and all future uploads use your personal 15 GB quota!
+
+#### 🔒 Important Git Security Rule
+To ensure you never accidentally leak client secrets or access tokens to GitHub, ensure your [`.gitignore`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/.gitignore) contains:
+```gitignore
+credentials.json
+credentials*.json
+Credential.json
+Credential*.json
+token.json
+Token.json
+.env
+```
+
+---
+
+### Method 2: Google Workspace Shared Drive (Team Drive)
 *Best for universities, enterprises, and research labs with Google Workspace accounts.*
 
 In a Google Workspace Shared Drive, files belong to the **domain pool** rather than an individual user's personal quota.
@@ -576,9 +851,9 @@ In a Google Workspace Shared Drive, files belong to the **domain pool** rather t
 ---
 
 ### Pre-Flight Validation Logging & Storage Mode Detection
-To prevent mid-pipeline crashes, [`GoogleDriveClient`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/services/drive/client.py) executes pre-flight validation via [`validate_drive_target_or_fail()`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/services/drive/quota.py) prior to attempting file streaming:
+To prevent mid-pipeline crashes, [`GoogleDriveClient`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/services/drive/client.py) executes pre-flight validation via [`validate_upload_quota_preconditions()`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/services/drive/quota.py) prior to attempting file streaming:
 1. Detects whether auth is running in **User OAuth 2.0 Mode** (`token.json` / `credentials.json`) or **Service Account Mode** (`service_account.json`).
-2. Checks destination folder metadata via [`detect_drive_type()`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/services/drive/quota.py).
+2. If running in User OAuth 2.0 mode: logs `🔐 Auth Mode: USER_OAUTH_2.0 (Personal Drive storage space utilized)` and proceeds safely.
 3. If running in Service Account mode against a personal `My Drive` folder without Shared Drive backing, logs an actionable warning explaining the 403 quota constraint and recommends User OAuth 2.0.
 
 ### Payload Size Tracking & Resumable Chunked Streaming
@@ -666,7 +941,7 @@ Output files generated by [`StandardizedCsvBuilder`](file:///c:/Users/rohan/Docu
 - **Automated Pandas Ingestion:** When ingesting into Pandas, users can pass `header=15` (0-indexed) or use the built-in parser in [`batch_runner.py`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/batch_runner.py), which automatically sniffs whether the file is single-tier or two-tier:
   ```python
   import pandas as pd
-  df = pd.read_csv("output/Run_Example.csv", skiprows=15).dropna(how="all", axis=1)
+  df = pd.read_csv("storage/output/Run_Example.csv", skiprows=15).dropna(how="all", axis=1)
   ```
 
 ---
@@ -763,7 +1038,7 @@ python main.py --test
   1. **Method 1 (Personal Drive @gmail.com):** Switch to User OAuth 2.0 authentication by placing `credentials.json` in the root and letting `services/drive/oauth.py` generate `token.json`. Files uploaded will be owned by your personal account and use your personal Drive quota.
   2. **Method 2 (Workspace Domain):** Use a Google Workspace Shared Drive (Team Drive) where files consume the organizational domain storage pool rather than individual service account quotas (`supportsAllDrives=True`).
   3. **Pre-Flight Validation:** Pre-flight checks (`validate_drive_target_or_fail`) detect incompatible combinations before streaming, logging explicit guidance.
-  4. **Fail-Safe Local Storage:** If Drive sync fails or is unconfigured, the exported two-tier CSV is safely preserved in `output/` and attached directly to the completion email.
+  4. **Fail-Safe Local Storage:** If Drive sync fails or is unconfigured, the exported two-tier CSV is safely preserved in `storage/output/` and attached directly to the completion email.
 
 ### Scenario D: SMTP Authentication Rejection (Error 535)
 - **Symptom:** `❌ [Email ERROR] SMTP delivery failed: (535, '5.7.8 Username and Password not accepted')`
@@ -780,6 +1055,14 @@ python main.py --test
   1. `tag_parser.py` flags the error: `❌ [PAPERS_PER_TOPIC]: Hard ceiling is 500 papers`.
   2. Dispatches an automated corrective email with copy-paste correction blocks.
   3. Awaits user reply without terminating the daemon.
+
+### Scenario F: Module Migration & Path Resolution After Structural Consolidation
+- **Symptom:** `ModuleNotFoundError: No module named '...'` when executing scripts from nested subdirectories or running custom external scripts that imported top-level modules.
+- **Root Cause:** Single-purpose scripts were consolidated into purpose-built directories (`core/`, `utils/`, `services/`, `scripts/maintenance/`, `scripts/audit/`).
+- **Fail-Safe Recovery & Resolution:**
+  1. **Root Backward-Compatibility Shims:** The root directory preserves seamless shims (`analyzer.py`, `batch_runner.py`, `database.py`, `csv_builder.py`, `excel_builder.py`, `cache_cleaner.py`, `test_email.py`, `clean.ps1`). Legacy imports `from analyzer import PaperAnalyzer` and `from csv_builder import StandardizedCsvBuilder` continue to work without modification.
+  2. **Dynamic Root Keying (`BASE_DIR`):** All path lookups for `.env`, `credentials.json`, `token.json`, and database paths are dynamically resolved from `BASE_DIR = Path(__file__).resolve().parent...`. You can invoke scripts from any working directory (`python scripts/maintenance/clean.py` or from the repository root) without relative path breakage.
+  3. **Storage Relocation:** If looking for outputs or cache dumps, locate them under `storage/output/` and `storage/cache/` (or query `cfg.OUTPUT_DIR` / `cfg.CACHE_DIR`).
 
 ---
 
@@ -858,15 +1141,30 @@ python main.py --clear-cache
 # 7. Check and dispatch pending IST reminders immediately
 python main.py --check-reminders --tier morning
 
-# 8. Run automated unit test suite
+# 8. Run automated unit test suite (59 comprehensive tests)
+python -m unittest discover tests
+# Or via main CLI:
 python main.py --test
 
 # 9. Profile workspace disk footprint (single-pass audit)
+python scripts/audit/audit_footprint.py
+# Or backward-compatible wrapper:
 python scripts/audit_footprint.py
-# Or: .\scripts\audit_footprint.ps1
+# Or native PowerShell wrapper:
+.\scripts\audit\audit_footprint.ps1
 
 # 10. Clean transient caches, bytecode, and temp artifacts safely
-python scripts/clean.py --dry-run   # Preview items to be deleted
-python scripts/clean.py             # Execute cleanup
-# Or: .\clean.ps1 -DryRun / .\clean.ps1
+python scripts/maintenance/clean.py --dry-run   # Preview items to be deleted
+python scripts/maintenance/clean.py             # Execute cleanup
+# Or root convenience launcher:
+.\clean.ps1 -DryRun
+.\clean.ps1
+
+# 11. Test visual HTML email cards and dispatches
+python scripts/audit/test_email.py --all
+# Or backward-compatible wrapper:
+python test_email.py --all
+
+# 12. Google Drive OAuth 2.0 user login flow (Method 1)
+python drive_sync.py --login
 ```

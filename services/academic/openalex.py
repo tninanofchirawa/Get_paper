@@ -98,3 +98,70 @@ class OpenAlexClient:
             logger.warning(f"[OpenAlex] verify_doi failed for '{doi}': {e}")
             self.circuit_breaker.record_failure(None, str(e))
             return None
+
+    def verify_title(self, title: str) -> Optional[Dict[str, Any]]:
+        """Verifies metadata for a title against OpenAlex Works API."""
+        if not title or self.circuit_breaker.is_tripped():
+            return None
+
+        clean_title = title.strip()
+        url = f"{self.BASE_URL}/works?filter=title.search:{urllib.parse.quote(clean_title)}&per-page=1"
+
+        self.limiter.acquire()
+
+        def _do_request():
+            return self.session.get(url, headers=self.get_headers(), timeout=cfg.DEFAULT_TIMEOUT)
+
+        try:
+            resp = execute_with_429_retry(
+                request_fn=_do_request,
+                max_retries=cfg.MAX_RETRIES,
+                service_name="OpenAlex Title"
+            )
+
+            if resp is None or resp.status_code != 200:
+                if resp is None:
+                    self.circuit_breaker.record_failure(None, "Connection timeout")
+                return None
+
+            results = resp.json().get("results", [])
+            if not results:
+                return None
+
+            data = results[0]
+            matched_title = data.get("title", "")
+
+            from harvester.models import clean_matching_title
+            from difflib import SequenceMatcher
+            s1 = clean_matching_title(clean_title)
+            s2 = clean_matching_title(matched_title)
+            if SequenceMatcher(None, s1, s2).ratio() < 0.65:
+                return None
+
+            self.circuit_breaker.record_success()
+            location = data.get("primary_location") or {}
+            source = location.get("source") or {}
+
+            is_oa = bool(data.get("open_access", {}).get("is_oa", False))
+            pdf_url = data.get("open_access", {}).get("oa_url") or ""
+
+            raw_doi = data.get("doi", "") or ""
+            doi = raw_doi
+            if doi.startswith("https://doi.org/"):
+                doi = doi[len("https://doi.org/"):]
+
+            return {
+                "confirmed": True,
+                "title": matched_title,
+                "venue": source.get("display_name", ""),
+                "issn_list": source.get("issn", []),
+                "year": str(data.get("publication_year") or ""),
+                "doi": doi,
+                "is_oa": is_oa,
+                "pdf_link": pdf_url,
+                "type": data.get("type", "")
+            }
+        except Exception as e:
+            logger.warning(f"[OpenAlex] verify_title failed for '{title}': {e}")
+            self.circuit_breaker.record_failure(None, str(e))
+            return None

@@ -57,6 +57,7 @@ class VerificationCache:
             "open_access": bool(value.get("open_access")),
             "open_access_url": value.get("open_access_url", value.get("oa_url", "")),
             "source": value.get("source", ""),
-            "verified_sources": value.get("verified_sources", [])
+            "verified_sources": value.get("verified_sources", []),
+            "verified_via": value.get("verified_via", "Unverified")
         }
         self._data[clean_key] = compact_entry

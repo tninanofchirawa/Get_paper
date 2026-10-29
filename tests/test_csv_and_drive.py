@@ -12,6 +12,7 @@ import json
 import unittest
 from unittest.mock import MagicMock, patch
 
+from config import cfg
 from csv_builder import StandardizedCsvBuilder
 from drive_sync import GoogleDriveClient
 from email_service import EmailDispatcher
@@ -21,7 +22,7 @@ from analyzer import PaperAnalyzer
 
 class TestStandardizedCsvBuilder(unittest.TestCase):
     def setUp(self):
-        self.test_output = "output/test_export.csv"
+        self.test_output = os.path.join(cfg.OUTPUT_DIR, "test_export.csv")
         if os.path.exists(self.test_output):
             os.remove(self.test_output)
 
@@ -127,8 +128,9 @@ class TestStandardizedCsvBuilder(unittest.TestCase):
         # Check Row 16 (Index 15): Data column headers strictly on Row 16, beginning at Column B
         row_16 = rows[15]
         self.assertEqual(row_16[0], "")  # Col A blank
-        self.assertEqual(row_16[1:], StandardizedCsvBuilder.ANALYTICAL_FIELDS_32)
-        self.assertEqual(len(row_16[1:]), 32)
+        self.assertEqual(row_16[1:], StandardizedCsvBuilder.TABLE_HEADERS)
+        self.assertEqual(len(row_16[1:]), len(StandardizedCsvBuilder.TABLE_HEADERS))
+        self.assertIn("Verified_Via", row_16[1:])
 
         # Check Row 17 (Index 16): Paper record strictly on Row 17, beginning at Column B
         row_17 = rows[16]
@@ -150,9 +152,12 @@ class TestStandardizedCsvBuilder(unittest.TestCase):
         v_sources = json.loads(row_17[17])
         self.assertEqual(v_sources, ["Scopus", "Web of Science", "Crossref"])
 
+        # Verified_Via column validation
+        self.assertEqual(row_17[18], "Unverified")
+
         # Multiline abstract integrity & quotes escaping
-        self.assertIn('Line 1 with "quotes" and, commas.', row_17[18])
-        self.assertIn("Line 2 with math: θ = 0.5 & α-cuts.", row_17[18])
+        self.assertIn('Line 1 with "quotes" and, commas.', row_17[19])
+        self.assertIn("Line 2 with math: θ = 0.5 & α-cuts.", row_17[19])
 
 
 class TestGoogleDriveStorageAndQuota(unittest.TestCase):
@@ -163,8 +168,8 @@ class TestGoogleDriveStorageAndQuota(unittest.TestCase):
         client.auth_mode = "service_account"
         client.service_account_email = "test-service-acct@test.iam.gserviceaccount.com"
 
-        temp_file = "output/temp_quota_test.csv"
-        os.makedirs("output", exist_ok=True)
+        temp_file = os.path.join(cfg.OUTPUT_DIR, "temp_quota_test.csv")
+        os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
         with open(temp_file, "w", encoding="utf-8") as f:
             f.write("A,B\n1,2\n")
 
@@ -194,8 +199,8 @@ class TestGoogleDriveStorageAndQuota(unittest.TestCase):
         client.service.files.return_value = mock_files
         client.auth_mode = "service_account"
 
-        temp_file = "output/temp_shared_drive_test.csv"
-        os.makedirs("output", exist_ok=True)
+        temp_file = os.path.join(cfg.OUTPUT_DIR, "temp_shared_drive_test.csv")
+        os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
         with open(temp_file, "w", encoding="utf-8") as f:
             f.write("Material ID,Title\nM-0001,Test\n")
 
@@ -233,8 +238,8 @@ class TestGoogleDriveStorageAndQuota(unittest.TestCase):
         client.service.files.return_value = mock_files
         client.auth_mode = "oauth_user"
 
-        temp_file = "output/temp_oauth_test.csv"
-        os.makedirs("output", exist_ok=True)
+        temp_file = os.path.join(cfg.OUTPUT_DIR, "temp_oauth_test.csv")
+        os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
         with open(temp_file, "w", encoding="utf-8") as f:
             f.write("A,B\n1,2\n")
 
@@ -285,8 +290,8 @@ class TestEmailReliabilityAndMetrics(unittest.TestCase):
         }
         drive_link = "https://drive.google.com/file/d/test_file_id/view"
 
-        temp_csv = "output/temp_report_test.csv"
-        os.makedirs("output", exist_ok=True)
+        temp_csv = os.path.join(cfg.OUTPUT_DIR, "temp_report_test.csv")
+        os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
         with open(temp_csv, "w", encoding="utf-8") as f:
             f.write("A,B\n1,2\n")
 
