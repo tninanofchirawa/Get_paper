@@ -14,12 +14,14 @@ import time
 import urllib.parse
 import logging
 from typing import Optional, Dict, Any, List, Tuple
+from difflib import SequenceMatcher
 import requests
 
 from config import cfg
 from utils.rate_limiters import TokenBucketRateLimiter, GLOBAL_SEMANTIC_SCHOLAR_LIMITER
 from utils.retry_handlers import execute_with_429_retry
 from utils.circuit_breaker import CircuitBreaker
+from harvester.models import clean_matching_title, sanitize_doi
 
 logger = logging.getLogger("SemanticScholarClient")
 
@@ -32,7 +34,7 @@ class SemanticScholarClient:
     """
     Client for Semantic Scholar Graph API.
     Enforces strict 1 req/sec pacing, HTTP 429 exponential backoff,
-    and mandatory 'x-api-key' header forwarding from S2_API_KEY.
+    and mandatory 'x-api-key' header forwarding with token rotation.
     """
 
     BASE_URL = "https://api.semanticscholar.org/graph/v1"
@@ -47,16 +49,20 @@ class SemanticScholarClient:
         self.on_429_callback: Optional[Any] = None
 
     def _get_api_key(self) -> str:
-        """Retrieves active S2 API key from environment or key pool."""
-        env_key = os.getenv("S2_API_KEY")
-        if env_key:
-            return env_key
+        """Retrieves active S2 API key from key pool first, falling back to env/config."""
         if self.key_pool:
-            return self.key_pool[self.current_key_idx % len(self.key_pool)]
-        return cfg.S2_API_KEY
+            return self.key_pool[self.current_key_idx % len(self.key_pool)].strip()
+        
+        env_key = (
+            os.getenv("S2_API_KEY") 
+            or getattr(cfg, "S2_API_KEY", None) 
+            or getattr(cfg, "SEMANTIC_SCHOLAR_API_KEY", None) 
+            or ""
+        )
+        return env_key.strip()
 
     def _rotate_key(self):
-        """Rotates to next key in pool upon receiving rate limit response."""
+        """Rotates to next key in pool upon receiving rate limit or auth response."""
         if self.key_pool and len(self.key_pool) > 1:
             self.current_key_idx = (self.current_key_idx + 1) % len(self.key_pool)
             logger.info(f"[SemanticScholar] Rotated API key (active index: {self.current_key_idx})")
@@ -75,19 +81,23 @@ class SemanticScholarClient:
     def verify_doi(self, doi: str) -> Optional[Dict[str, Any]]:
         """
         Verifies citation metadata for a DOI against Semantic Scholar.
-        Applies token-bucket pacing and 429 backoff retries.
+        Applies token-bucket pacing on every attempt and properly formats the DOI prefix.
         """
         if not doi or self.circuit_breaker.is_tripped():
             return None
 
-        clean_doi = doi.strip()
-        url = f"{self.BASE_URL}/paper/{urllib.parse.quote(clean_doi)}"
+        clean_doi = sanitize_doi(doi)
+        if not clean_doi:
+            return None
+
+        # Prefix with DOI: and encode with safe='' to avoid route path fragmentation
+        encoded_id = f"DOI:{urllib.parse.quote(clean_doi, safe='')}"
+        url = f"{self.BASE_URL}/paper/{encoded_id}"
         params = {"fields": "title,venue,year,externalIds,openAccessPdf"}
 
-        # Strict 1 req/s token bucket pacing
-        self.limiter.acquire()
-
         def _do_request():
+            # Paced inside the execution block so retries observe the 1 RPS limit
+            self.limiter.acquire()
             headers = self.get_headers()
             return self.session.get(url, params=params, headers=headers, timeout=cfg.DEFAULT_TIMEOUT)
 
@@ -95,7 +105,7 @@ class SemanticScholarClient:
             resp = execute_with_429_retry(
                 request_fn=_do_request,
                 max_retries=cfg.MAX_RETRIES,
-                initial_backoff=1.5,
+                initial_backoff=2.0,
                 service_name="Semantic Scholar"
             )
 
@@ -119,6 +129,9 @@ class SemanticScholarClient:
                     "pdf_link": oa.get("url", ""),
                     "external_ids": data.get("externalIds", {})
                 }
+            elif resp.status_code == 404:
+                # 404 indicates the paper is unindexed in S2, not an infrastructure failure
+                return None
             elif resp.status_code == 429:
                 self._rotate_key()
                 if self.on_429_callback:
@@ -139,38 +152,6 @@ class SemanticScholarClient:
             logger.warning(f"[SemanticScholar] verify_doi failed for '{doi}': {e}")
             self.circuit_breaker.record_failure(None, str(e))
             return None
-
-    def verify_title(self, title: str) -> Optional[Dict[str, Any]]:
-        """Verifies metadata for a title against Semantic Scholar Graph API."""
-        if not title or self.circuit_breaker.is_tripped():
-            return None
-        items, _, _ = self.search_papers(query=title, limit=1)
-        if not items:
-            return None
-        data = items[0]
-        matched_title = data.get("title", "")
-        from harvester.models import clean_matching_title, sanitize_doi
-        from difflib import SequenceMatcher
-        s1 = clean_matching_title(title)
-        s2 = clean_matching_title(matched_title)
-        if SequenceMatcher(None, s1, s2).ratio() < 0.65:
-            return None
-
-        self.circuit_breaker.record_success()
-        venue = data.get("venue") or ""
-        oa = data.get("openAccessPdf") or {}
-        ext_ids = data.get("externalIds") or {}
-        doi = sanitize_doi(ext_ids.get("DOI", ""))
-
-        return {
-            "confirmed": True,
-            "title": matched_title,
-            "venue": venue,
-            "year": str(data.get("year") or ""),
-            "doi": doi,
-            "pdf_link": oa.get("url", ""),
-            "external_ids": ext_ids
-        }
 
     def search_papers(
         self,
@@ -202,10 +183,9 @@ class SemanticScholarClient:
             elif len(parts) == 1:
                 params["year"] = parts[0]
 
-        # Enforce strict 1 req/sec pacing
-        self.limiter.acquire()
-
         def _do_request():
+            # Paced inside retry closure so automatic backoffs do not bypass rate limits
+            self.limiter.acquire()
             headers = self.get_headers()
             return self.session.get(url, params=params, headers=headers, timeout=cfg.DEFAULT_TIMEOUT)
 
@@ -213,21 +193,68 @@ class SemanticScholarClient:
             resp = execute_with_429_retry(
                 request_fn=_do_request,
                 max_retries=cfg.MAX_RETRIES,
-                initial_backoff=1.5,
+                initial_backoff=2.0,
                 service_name="Semantic Scholar Search"
             )
 
-            if resp is None or resp.status_code != 200:
-                if resp is not None and resp.status_code == 429:
-                    self._rotate_key()
+            if resp is None:
+                self.last_status_code = None
+                self.circuit_breaker.record_failure(None, "Search request timeout or error")
                 return [], 0, False
 
-            data = resp.json()
-            total = data.get("total", 0)
-            items = data.get("data", [])
-            has_more = (offset + len(items)) < total and len(items) > 0
-            return items, total, has_more
+            self.last_status_code = resp.status_code
+
+            if resp.status_code == 200:
+                self.circuit_breaker.record_success()
+                data = resp.json()
+                total = data.get("total", 0)
+                items = data.get("data", [])
+                has_more = (offset + len(items)) < total and len(items) > 0
+                return items, total, has_more
+            elif resp.status_code == 429:
+                self._rotate_key()
+                self.circuit_breaker.record_failure(429, "Search rate limited")
+                return [], 0, False
+            elif resp.status_code in (401, 403):
+                self._rotate_key()
+                self.circuit_breaker.record_failure(resp.status_code, resp.text[:100])
+                return [], 0, False
+
+            return [], 0, False
 
         except Exception as e:
             logger.error(f"[SemanticScholar] search_papers failed: {e}")
+            self.circuit_breaker.record_failure(None, str(e))
             return [], 0, False
+
+    def verify_title(self, title: str) -> Optional[Dict[str, Any]]:
+        """Verifies metadata for a title against Semantic Scholar Graph API."""
+        if not title or self.circuit_breaker.is_tripped():
+            return None
+
+        items, _, _ = self.search_papers(query=title, limit=1)
+        if not items:
+            return None
+
+        data = items[0]
+        matched_title = data.get("title", "")
+        
+        s1 = clean_matching_title(title)
+        s2 = clean_matching_title(matched_title)
+        if SequenceMatcher(None, s1, s2).ratio() < 0.65:
+            return None
+
+        venue = data.get("venue") or ""
+        oa = data.get("openAccessPdf") or {}
+        ext_ids = data.get("externalIds") or {}
+        doi = sanitize_doi(ext_ids.get("DOI", ""))
+
+        return {
+            "confirmed": True,
+            "title": matched_title,
+            "venue": venue,
+            "year": str(data.get("year") or ""),
+            "doi": doi,
+            "pdf_link": oa.get("url", ""),
+            "external_ids": ext_ids
+        }
