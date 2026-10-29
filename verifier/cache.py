@@ -45,4 +45,18 @@ class VerificationCache:
 
     def set(self, key: str, value: Dict[str, Any]):
         clean_key = str(key).strip().lower()
-        self._data[clean_key] = value
+        # Truncate raw API dumps down to compact verified schema
+        compact_entry = {
+            "doi": value.get("doi", clean_key),
+            "title": value.get("title", ""),
+            "year": value.get("year", ""),
+            "venue": value.get("venue", ""),
+            "scopus": bool(value.get("scopus") or value.get("indexed_scopus")),
+            "wos": bool(value.get("wos") or value.get("indexed_wos")),
+            "ieee": bool(value.get("ieee") or value.get("indexed_ieee")),
+            "open_access": bool(value.get("open_access")),
+            "open_access_url": value.get("open_access_url", value.get("oa_url", "")),
+            "source": value.get("source", ""),
+            "verified_sources": value.get("verified_sources", [])
+        }
+        self._data[clean_key] = compact_entry

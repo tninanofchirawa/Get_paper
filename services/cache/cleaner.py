@@ -1,12 +1,13 @@
 """
-services/cache/cleaner.py - Automated Maintenance & Nightly Cache Purging Engine.
+services/cache/cleaner.py - Automated Maintenance, LRU Size-Capped Eviction & Nightly Purge.
 Unified Academic Paper Harvester, Verifier & Notification Pipeline.
 
 Requirements:
-- Automated maintenance routine that clears all temporary API cache files, response caches,
-  and transient query artifacts every night at midnight (00:00).
-- Cron-compatible standalone entrypoint and scheduled background trigger.
-- Manual CLI override flag (--clear-cache / --clean-cache) to flush cache on demand.
+- Nightly Purge (00:00 Maintenance): Automatically clears transient API query artifacts,
+  response cache dumps, and temporary files at midnight every night.
+- Size-Capped LRU Eviction: Enforces MAX_CACHE_SIZE_MB (default 30 MB), evicting oldest
+  entries regardless of age when the local cache directory ceiling is breached.
+- Manual CLI Override: Supports --clear-cache / --clean-cache on demand.
 """
 
 import os
@@ -18,20 +19,32 @@ from typing import List, Optional
 
 from config import cfg
 from services.cache.ttl import CacheTTLPolicy
+from services.cache.manager import CacheManager, MAX_CACHE_SIZE_MB
 
 logger = logging.getLogger("CacheCleaner")
 
 
-def purge_stale_cache(
-    ttl_seconds: int = CacheTTLPolicy.VERIFICATION_TTL_SECONDS,
-    target_dirs: Optional[List[str]] = None
+def enforce_lru_cache_size_cap(
+    cache_dir: Optional[str] = None,
+    max_size_mb: float = MAX_CACHE_SIZE_MB
 ) -> int:
     """
-    Inspects cache/, logs/, and temp/ directories and permanently unlinks any file
-    whose modification timestamp exceeds the TTL threshold (default: 48 hours).
+    Enforces the strict size-capped LRU eviction manager on the cache directory.
+    When directory size exceeds max_size_mb, drops the oldest records until within ceiling.
+    """
+    mgr = CacheManager(cache_dir=cache_dir, max_size_mb=max_size_mb)
+    return mgr.enforce_size_cap()
 
-    Returns:
-        int: Number of stale cache files purged.
+
+def purge_stale_cache(
+    ttl_seconds: int = CacheTTLPolicy.VERIFICATION_TTL_SECONDS,
+    target_dirs: Optional[List[str]] = None,
+    max_size_mb: float = MAX_CACHE_SIZE_MB
+) -> int:
+    """
+    Inspects cache/, logs/, and temp/ directories:
+    1. Unlinks files exceeding TTL (default: 48 hours).
+    2. Applies strict LRU size-capped eviction if cache exceeds max_size_mb (30 MB).
     """
     if target_dirs is None:
         target_dirs = [
@@ -54,7 +67,7 @@ def purge_stale_cache(
 
         try:
             for item in p.rglob("*"):
-                # Only unlink regular files; preserve directories and .gitkeep files
+                # Preserve directories and .gitkeep files
                 if item.is_file() and item.name != ".gitkeep":
                     try:
                         mtime = os.path.getmtime(item)
@@ -70,7 +83,11 @@ def purge_stale_cache(
         except Exception as e:
             logger.warning(f"[CACHE CLEANER] Error inspecting directory '{dir_path}': {e}")
 
-    summary_msg = f"[CACHE CLEANER] Purged {purged_count} stale cache files older than {ttl_seconds/3600:.0f} hours."
+    # Enforce LRU size cap on cache directory
+    lru_evicted = enforce_lru_cache_size_cap(cache_dir=cfg.CACHE_DIR, max_size_mb=max_size_mb)
+    purged_count += lru_evicted
+
+    summary_msg = f"[CACHE CLEANER] Purged {purged_count} stale/oversized cache files."
     print(f"🧹 {summary_msg}")
     logger.info(summary_msg)
     return purged_count
@@ -78,20 +95,13 @@ def purge_stale_cache(
 
 def purge_nightly_cache(
     target_dirs: Optional[List[str]] = None,
-    force_all: bool = False
+    force_all: bool = False,
+    max_size_mb: float = MAX_CACHE_SIZE_MB
 ) -> int:
     """
-    Automated maintenance routine that clears all temporary API cache files,
-    response caches, and transient query artifacts.
-    Runs every night at midnight (00:00) or on-demand via --clear-cache.
-
-    If force_all=True:
-        Completely flushes all cache files regardless of age (manual override).
-    If force_all=False:
-        Evicts all transient query artifacts and cache files older than 24 hours.
-
-    Returns:
-        int: Number of cache files purged.
+    Automated nightly maintenance routine executing at midnight (00:00).
+    Clears temporary API cache files, response caches, and transient query artifacts.
+    Enforces the 30 MB LRU size cap across all runs.
     """
     if target_dirs is None:
         target_dirs = [
@@ -101,7 +111,6 @@ def purge_nightly_cache(
 
     now = time.time()
     purged_count = 0
-    # For nightly cleanup, evict query cache files (>24 hours) or all if forced
     cutoff_seconds = 0 if force_all else CacheTTLPolicy.QUERY_CACHE_TTL_SECONDS
 
     mode_label = "Complete Cache Flush" if force_all else "Automated Nightly Purge (00:00 Maintenance)"
@@ -130,6 +139,10 @@ def purge_nightly_cache(
                         logger.warning(f"[NightlyCleaner] Could not remove '{item}': {e}")
         except Exception as e:
             logger.warning(f"[NightlyCleaner] Error inspecting directory '{dir_path}': {e}")
+
+    if not force_all:
+        lru_evicted = enforce_lru_cache_size_cap(cache_dir=cfg.CACHE_DIR, max_size_mb=max_size_mb)
+        purged_count += lru_evicted
 
     summary_msg = f"[NightlyCleaner] {mode_label} finished. Purged {purged_count} files."
     print(f"✅ 🧹 {summary_msg}\n")

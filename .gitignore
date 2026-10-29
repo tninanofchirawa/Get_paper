@@ -1,45 +1,70 @@
 # ==============================================================================
-# Production .gitignore for Unified Academic Paper Harvester & Verifier
+# Hardened .gitignore for Unified Academic Paper Harvester & Verifier
 # ==============================================================================
 
-# 1. Environment & API Secrets
+# 1. Virtual Environments (Decoupled from source repository)
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# 2. Environment Secrets & API Credentials
 .env
 .env.local
 .env.*
 !.env.example
 service_account.json
+credentials.json
+credentials*.json
+token.json
 
-# 2. Spreadsheets & Data Exports (ignoring run outputs while preserving data templates and inputs)
+# 3. Spreadsheets & Data Exports (ignoring run outputs while preserving data templates and inputs)
+output/*
+!output/.gitkeep
+*.csv
 *.xlsx
 *.xls
 !data/scopus_source_list.xlsx
-*.csv
 !data/wos_master_journal_list.csv
 !input/*.csv
 
-# 3. Python Bytecode & Cache
+# 4. Python Bytecode, Caches & Wheels
 __pycache__/
 *.py[cod]
 *$py.class
+*.whl
+*.egg-info/
 .pytest_cache/
+.coverage
+htmlcov/
 
-# 4. Cache, Logs, and Temp runtime dumps
+# 5. Local Runtime Caches, Logs, and Temp runtime dumps
 cache/*
 !cache/.gitkeep
+.cache/
 logs/*
 !logs/.gitkeep
 temp/*
 !temp/.gitkeep
-output/*
-!output/.gitkeep
 
-# 5. SQLite Databases
+# 6. SQLite Databases & WAL Journal Files
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
 data/*.db
+data/*.sqlite
 data/*.db-wal
 data/*.db-shm
+!data/.gitkeep
 
-# 6. OS & Editor metadata
+# 7. OS & Editor Metadata
 .DS_Store
 Thumbs.db
+desktop.ini
 .vscode/
 .idea/
+*.swp

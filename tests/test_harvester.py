@@ -1,5 +1,5 @@
 """
-tests/test_harvester.py - Tests for harvesting, sanitization, deduplication, and active accumulator loop.
+tests/test_harvester.py - Tests for harvesting, sanitization, deduplication, active distributor, and accumulator.
 """
 
 import unittest
@@ -8,8 +8,30 @@ from unittest.mock import AsyncMock, patch, MagicMock
 
 from harvester.models import Paper, sanitize_doi, sanitize_title, clean_matching_title, clean_year
 from harvester.deduplication import DeduplicationEngine
+from harvester.distributor import ActiveQueryDistributor, ProviderState
 from harvester.pipeline import AsyncHarvestingPipeline
 from harvester.base import BaseAsyncHarvester
+
+
+def run_coro_sync(coro):
+    """Synchronously steps an async coroutine without requiring an IOCP/socket loop."""
+    stack = [coro]
+    val = None
+    while stack:
+        top = stack[-1]
+        try:
+            if hasattr(top, "__await__"):
+                it = top.__await__()
+                stack[-1] = it
+                top = it
+            res = top.send(val)
+            val = None
+            if hasattr(res, "__await__"):
+                stack.append(res)
+        except StopIteration as e:
+            stack.pop()
+            val = e.value
+    return val
 
 
 class TestHarvesterModels(unittest.TestCase):
@@ -49,7 +71,7 @@ class TestDeduplicationEngine(unittest.TestCase):
         p2 = Paper(title="Adaptive Neuro Fuzzy Inference Systems for Medical Diagnosis", doi="")
 
         self.assertTrue(deduper.add_paper(p1))
-        self.assertFalse(deduper.add_paper(p2))  # > 90% match dropped
+        self.assertFalse(deduper.add_paper(p2))
         self.assertEqual(deduper.duplicates_removed_count, 1)
 
     def test_distinct_metrics_tracking(self):
@@ -85,8 +107,45 @@ class MockHarvester(BaseAsyncHarvester):
         return [], None, False
 
 
-class TestAccumulatorLoopFix(unittest.IsolatedAsyncioTestCase):
-    async def test_83_87_freezing_bug_fix(self):
+class TestActiveQueryDistributor(unittest.TestCase):
+    def test_round_robin_provider_rotation(self):
+        h1 = MockHarvester("SourceA", pages=[[Paper(title="A1", doi="10.1/a1")]])
+        h2 = MockHarvester("SourceB", pages=[[Paper(title="B1", doi="10.1/b1")]])
+        h3 = MockHarvester("SourceC", pages=[[Paper(title="C1", doi="10.1/c1")]])
+
+        distributor = ActiveQueryDistributor([h1, h2, h3])
+
+        p1, _ = distributor.select_next_provider()
+        self.assertEqual(p1.name, "SourceA")
+        p2, _ = distributor.select_next_provider()
+        self.assertEqual(p2.name, "SourceB")
+        p3, _ = distributor.select_next_provider()
+        self.assertEqual(p3.name, "SourceC")
+        # Wraps back to SourceA
+        p4, _ = distributor.select_next_provider()
+        self.assertEqual(p4.name, "SourceA")
+
+    def test_dynamic_cooldown_and_immediate_rotation(self):
+        h1 = MockHarvester("Primary", pages=[])
+        h2 = MockHarvester("FallbackOpenAlex", pages=[[Paper(title="O1", doi="10.1/o1")]])
+
+        distributor = ActiveQueryDistributor([h1, h2])
+
+        p1, _ = distributor.select_next_provider()
+        self.assertEqual(p1.name, "Primary")
+
+        # Simulate 429/failure on Primary -> triggers cooldown
+        distributor.record_failure(p1, Exception("429 Too Many Requests"))
+        self.assertGreater(p1.cooldown_until, 0)
+        self.assertGreaterEqual(p1.backoff_seconds, 5.5)
+
+        # Next query rotates immediately to FallbackOpenAlex rather than hammering Primary
+        p2, _ = distributor.select_next_provider()
+        self.assertEqual(p2.name, "FallbackOpenAlex")
+
+
+class TestAccumulatorLoopFix(unittest.TestCase):
+    def test_83_87_freezing_bug_fix(self):
         """
         Tests that when a single page returns fewer items than target quota (e.g. 50 items),
         the accumulator loop continues paginating until target quota (e.g. 85 items) is met.
@@ -99,7 +158,7 @@ class TestAccumulatorLoopFix(unittest.IsolatedAsyncioTestCase):
         pipeline = AsyncHarvestingPipeline(harvesters=[mock_h])
 
         target_quota = 85
-        results, metrics = await pipeline.harvest(query="test", target_quota=target_quota, session=MagicMock())
+        results, metrics = run_coro_sync(pipeline.harvest(query="test", target_quota=target_quota, session=MagicMock()))
 
         self.assertEqual(len(results), target_quota)
         self.assertEqual(metrics["raw_scraped"], 100)

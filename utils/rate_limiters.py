@@ -83,3 +83,19 @@ def rate_limited(limiter: TokenBucketRateLimiter):
             return fn(*args, **kwargs)
         return wrapper
     return decorator
+
+
+# Global singleton cumulative rate limiter for all Semantic Scholar endpoints:
+# Strict 1 request per second with a 0.05s safety buffer (1.05s total interval).
+GLOBAL_SEMANTIC_SCHOLAR_LIMITER = TokenBucketRateLimiter(
+    rate_limit_per_second=1.0,
+    safety_buffer_seconds=0.05
+)
+
+__all__ = [
+    "TokenBucketRateLimiter",
+    "AsyncRateLimiter",
+    "rate_limited",
+    "GLOBAL_SEMANTIC_SCHOLAR_LIMITER",
+]
+

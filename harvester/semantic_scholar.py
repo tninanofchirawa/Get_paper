@@ -9,6 +9,7 @@ from typing import List, Tuple, Optional, Dict, Any
 from config import cfg
 from harvester.models import Paper, sanitize_doi
 from harvester.base import BaseAsyncHarvester
+from utils.rate_limiters import GLOBAL_SEMANTIC_SCHOLAR_LIMITER
 
 
 class SemanticScholarHarvester(BaseAsyncHarvester):
@@ -44,6 +45,9 @@ class SemanticScholarHarvester(BaseAsyncHarvester):
                 params["year"] = f"{parts[0]}-{parts[1]}"
             elif len(parts) == 1:
                 params["year"] = parts[0]
+
+        # Enforce strict global 1 req/sec rate limit across all Semantic Scholar endpoints
+        await GLOBAL_SEMANTIC_SCHOLAR_LIMITER.acquire_async()
 
         data = await self.get_json(session, self.base_url, params=params)
         if not data:

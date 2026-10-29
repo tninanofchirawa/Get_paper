@@ -8,6 +8,8 @@ from harvester.openalex import OpenAlexHarvester
 from harvester.crossref import CrossrefHarvester
 from harvester.arxiv import ArxivHarvester
 from harvester.semantic_scholar import SemanticScholarHarvester
+from harvester.core_ac import CoreHarvester
+from harvester.distributor import ActiveQueryDistributor, ProviderState
 from harvester.deduplication import DeduplicationEngine
 from harvester.pipeline import AsyncHarvestingPipeline
 
@@ -23,6 +25,9 @@ __all__ = [
     "CrossrefHarvester",
     "ArxivHarvester",
     "SemanticScholarHarvester",
+    "CoreHarvester",
+    "ActiveQueryDistributor",
+    "ProviderState",
     "DeduplicationEngine",
     "AsyncHarvestingPipeline",
 ]

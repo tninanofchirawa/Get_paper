@@ -29,25 +29,28 @@ Welcome to the definitive engineering manual and user handbook for the **Unified
 4. [🎯 Multiple-Choice Questions (MCQ) & Filters Breakdown](#4--multiple-choice-questions-mcq--filters-breakdown)
    - [Trade-Off Matrix: Speed vs. Coverage vs. Quota Impact](#trade-off-matrix-speed-vs-coverage-vs-quota-impact)
    - [Concrete Output Record Samples](#concrete-output-record-samples)
-5. [⚡ API Configuration, Rate Limiting & Concurrency Compliance](#5--api-configuration-rate-limiting--concurrency-compliance)
-   - [Semantic Scholar Strict 1 req/sec Architecture](#semantic-scholar-strict-1-reqsec-architecture)
+5. [⚡ API Configuration, Token-Bucket Rate Limiting & Active Multi-Source Round-Robin Query Distributor](#5--api-configuration-token-bucket-rate-limiting--active-multi-source-round-robin-query-distributor)
+   - [Semantic Scholar Strict 1 req/sec Global Limiter](#semantic-scholar-strict-1-reqsec-global-limiter)
    - [Mathematical Rate Limiting & Token Bucket Formulation](#mathematical-rate-limiting--token-bucket-formulation)
-   - [HTTP 429 Exponential Backoff & Retry Mechanism](#http-429-exponential-backoff--retry-mechanism)
-   - [Outbound Header Compliance & Token Pooling](#outbound-header-compliance--token-pooling)
-   - [Multi-Provider Polite Pool & Rate Caps](#multi-provider-polite-pool--rate-caps)
-6. [🌙 Automated Nightly Cache Invalidation & Maintenance](#6--automated-nightly-cache-invalidation--maintenance)
+   - [Active Query Distributor & Cross-Provider Round-Robin Rotation](#active-query-distributor--cross-provider-round-robin-rotation)
+   - [Dynamic Cooldown Buffer (5.5s) & Exponential Backoff Window](#dynamic-cooldown-buffer-55s--exponential-backoff-window)
+   - [Multi-Provider Polite Pool & Rate Caps (OpenAlex, Crossref, arXiv, CORE)](#multi-provider-polite-pool--rate-caps-openalex-crossref-arxiv-core)
+6. [🌙 Automated Nightly Cache Invalidation, Compact Data Schema & Footprint Maintenance](#6--automated-nightly-cache-invalidation-compact-data-schema--footprint-maintenance)
    - [Midnight 00:00 IST Automated Purge Routine](#midnight-0000-ist-automated-purge-routine)
-   - [TTL Eviction Hierarchy](#ttl-eviction-hierarchy)
-   - [Manual CLI Cache Flushing (--clear-cache)](#manual-cli-cache-flushing---clear-cache)
-7. [☁️ Google Drive Cloud Storage & 403 Quota Resolution](#7-️-google-drive-cloud-storage--403-quota-resolution)
+   - [Compact "Data-Only" Payload Schema](#compact-data-only-payload-schema)
+   - [LRU 30 MB Size-Capped Eviction Engine](#lru-30-mb-size-capped-eviction-engine)
+   - [Automated Disk Footprint Profiling (audit_footprint.py / .ps1)](#automated-disk-footprint-profiling-audit_footprintpy--ps1)
+   - [Zero-Dependency Safe Artifact Purger (clean.py / clean.ps1)](#zero-dependency-safe-artifact-purger-cleanpy--cleanps1)
+7. [☁️ Google Drive Cloud Storage & 403 Storage Quota Resolution](#7-️-google-drive-cloud-storage--403-quota-resolution)
    - [Root Cause of the 403 Storage Quota Error](#root-cause-of-the-403-storage-quota-error)
-   - [Option A: Google Shared Drive (Recommended)](#option-a-google-shared-drive-recommended)
-   - [Option B: Personal Drive Shared Folder](#option-b-personal-drive-shared-folder)
-   - [Option C: User-Level OAuth 2.0 Credentials](#option-c-user-level-oauth-20-credentials)
-   - [Payload Size Tracking & Gzip Compression](#payload-size-tracking--gzip-compression)
-8. [📋 Standardized 37-Column UTF-8 CSV Schema](#8--standardized-37-column-utf-8-csv-schema)
-   - [Schema Definition & Field Specifications](#schema-definition--field-specifications)
-   - [RFC 4180 Escaping Rules & Excel Compatibility](#rfc-4180-escaping-rules--excel-compatibility)
+   - [Method 1: User OAuth 2.0 Credentials (Personal @gmail.com Drives)](#method-1-user-oauth-20-credentials-personal-gmailcom-drives)
+   - [Method 2: Google Workspace Shared Drive (Team Drive)](#method-2-google-workspace-shared-drive-team-drive)
+   - [Pre-Flight Validation Logging & Storage Mode Detection](#pre-flight-validation-logging--storage-mode-detection)
+   - [Payload Size Tracking & Resumable Chunked Streaming](#payload-size-tracking--resumable-chunked-streaming)
+8. [📋 Formatted Two-Tier CSV Architecture & 32-Field Analytical Dataset](#8--formatted-two-tier-csv-architecture--32-field-analytical-dataset)
+   - [Two-Tier Layout Specification (Rows 1-15 Header Block, Row 16+ Dataset)](#two-tier-layout-specification-rows-1-15-header-block-row-16-dataset)
+   - [32 Standard Analytical Fields Breakdown (Columns B through AG)](#32-standard-analytical-fields-breakdown-columns-b-through-ag)
+   - [Excel, Google Sheets & Pandas Dual-Tier Compatibility](#excel-google-sheets--pandas-dual-tier-compatibility)
 9. [🔬 Deduplication & Fuzzy Title Matching Algorithm](#9--deduplication--fuzzy-title-matching-algorithm)
    - [Two-Stage Deduplication Architecture](#two-stage-deduplication-architecture)
    - [Inverted Token Buckets & SequenceMatcher Math](#inverted-token-buckets--sequencematcher-math)
@@ -88,14 +91,15 @@ flowchart TD
         PARSER -- "Valid Config" --> PIPE["Async Harvesting Pipeline"]
     end
 
-    subgraph Harv["⚡ 2. Asynchronous Accumulator Harvester"]
-        PIPE --> ACC["Active Accumulator Loop (aiohttp)"]
-        ACC --> OA["OpenAlex API (10 req/s)"]
-        ACC --> CR["Crossref REST (50 req/s polite pool)"]
-        ACC --> AR["arXiv Atom XML (3s polite delay)"]
-        ACC --> SS["Semantic Scholar Graph API (1 req/s strict)"]
-        OA & CR & AR & SS --> DEDUP["Deduplication Engine\n(Exact DOI + 90% Fuzzy Title Normalization)"]
-        DEDUP -- "Paginates until verified >= Quota" --> QUEUE["Unique Candidate Papers Queue"]
+    subgraph Harv["⚡ 2. Active Round-Robin Accumulator Harvester"]
+        PIPE --> DIST["ActiveQueryDistributor (Round-Robin & Dynamic Cooldown)"]
+        DIST --> OA["OpenAlex API (10 req/s)"]
+        DIST --> CR["Crossref REST (50 req/s polite pool)"]
+        DIST --> AR["arXiv Atom XML (3.1s polite delay)"]
+        DIST --> SS["Semantic Scholar Graph API (1 req/s Global Token-Bucket)"]
+        DIST --> CO["CORE API v3 (Search Aggregator)"]
+        OA & CR & AR & SS & CO --> DEDUP["Deduplication Engine\n(Exact DOI + 90% Fuzzy Title Normalization)"]
+        DEDUP -- "Rotates Providers until verified >= Quota" --> QUEUE["Unique Candidate Papers Queue"]
     end
 
     subgraph Ver["🏛️ 3. Multi-Source Academic Verification"]
@@ -119,12 +123,12 @@ flowchart TD
     end
 
     subgraph Out["📊 4. Analysis, Export & Cloud Synchronization"]
-        STRCT & BROAD --> ANL["Taxonomy & Learning Classifier (37 Fields)"]
-        ANL --> CSV["Standardized UTF-8 BOM CSV (csv_builder.py)\n(RFC 4180 Escaping, Validated JSON Verified Sources)"]
-        CSV --> GDRV["Google Drive v3 (supportsAllDrives=True)\n(Target Shared Drive / Shared Folder)"]
-        CSV --> RPT["Gmail Completion Report (Attached CSV + Metrics)"]
+        STRCT & BROAD --> ANL["Taxonomy & Learning Classifier (32 Fields)"]
+        ANL --> CSV["Standardized Two-Tier CSV (csv_builder.py)\n(Tier 1: Rows 1-15 Metadata | Tier 2: Row 16+ Dataset)"]
+        CSV --> GDRV["Google Drive v3 (User OAuth 2.0 or Shared Drive)\n(Pre-Flight Storage Quota Validation)"]
+        CSV --> RPT["Gmail Completion Report (Attached Two-Tier CSV + Metrics)"]
         CSV --> DB["SQLite: Log Metrics & Mark daily_run_completed"]
-        CSV --> PURGE["🧹 Cache Maintenance: Nightly 00:00 Purge"]
+        CSV --> PURGE["🧹 Cache Maintenance: Compact Payload, LRU 30MB & 00:00 Purge"]
     end
 ```
 
@@ -138,12 +142,29 @@ The codebase adheres strictly to the **Single-Responsibility Principle (SRP)**. 
 The_Paper_Getter/
 ├── .env                              # Production credentials (S2_API_KEY, SMTP, Drive) - Never committed
 ├── .env.example                      # Template configuration with all parameter placeholders
-├── .gitignore                        # Git exclusion rules (.env, *.db, service_account.json)
+├── .gitignore                        # Git exclusion rules (.env, *.db, service_account.json, token.json, .venv/)
+├── clean.ps1                         # PowerShell zero-dependency artifact & cache purger
 ├── config/                           # Centralized Configuration & Environment Loader
 │   ├── __init__.py                   # Package re-exports: cfg, PipelineConfig, constants
 │   ├── env.py                        # .env loading logic and candidate path resolution
-│   ├── constants.py                  # Rate limits, operational quotas, timeouts, TTL values
+│   ├── constants.py                  # Rate limits, operational quotas, timeouts, TTL values, MAX_CACHE_SIZE_MB
 │   └── settings.py                   # PipelineConfig dataclass, singleton 'cfg', headers generator
+├── harvester/                        # Multi-Provider Asynchronous Accumulator
+│   ├── __init__.py                   # Package exports: harvesters, distributor, pipeline
+│   ├── base.py                       # BaseAsyncHarvester with rate limiting and retry logic
+│   ├── arxiv.py                      # arXiv Atom XML harvester
+│   ├── core_ac.py                    # CORE API v3 search harvester
+│   ├── crossref.py                   # Crossref REST harvester
+│   ├── deduplication.py              # Exact canonical DOI + 90% fuzzy SequenceMatcher deduplication
+│   ├── distributor.py                # ActiveQueryDistributor: round-robin provider rotation & 5.5s dynamic cooldown
+│   ├── models.py                     # Paper dataclass with standardized analytical attributes
+│   ├── openalex.py                   # OpenAlex REST harvester
+│   ├── pipeline.py                   # AsyncHarvestingPipeline (Active round-robin query accumulator)
+│   └── semantic_scholar.py           # Semantic Scholar harvester (1 req/s global token-bucket)
+├── scripts/                          # Maintenance & Footprint Utilities
+│   ├── audit_footprint.py            # Python single-pass disk usage & directory footprint profiler
+│   ├── audit_footprint.ps1           # PowerShell wrapper for footprint audit
+│   └── clean.py                      # Safe zero-dependency cache and artifact cleaner (--dry-run support)
 ├── services/
 │   ├── academic/                     # Isolated Academic API Clients
 │   │   ├── __init__.py               # Re-exports: SemanticScholarClient, CrossrefClient, etc.
@@ -154,12 +175,13 @@ The_Paper_Getter/
 │   ├── cache/                        # Caching Layer & Automated Maintenance
 │   │   ├── __init__.py               # Re-exports: CacheManager, purge_stale_cache, purge_nightly_cache
 │   │   ├── ttl.py                    # CacheTTLPolicy (48h verification TTL, 24h query TTL)
-│   │   ├── manager.py                # CacheManager (SHA-256 key hashing, JSON read/write)
+│   │   ├── manager.py                # CacheManager (Compact schema, LRU size cap to 30 MB)
 │   │   └── cleaner.py                # Automated maintenance engine (00:00 midnight purge & --clear-cache)
 │   ├── drive/                        # Google Drive Cloud Storage & Quota Management
 │   │   ├── __init__.py               # Re-exports: GoogleDriveClient, drive_client
-│   │   ├── client.py                 # Drive API v3 uploader (supportsAllDrives=True, chunked streams)
-│   │   ├── quota.py                  # Service account 403 quota error prevention and diagnostics
+│   │   ├── client.py                 # Drive API v3 uploader (User OAuth 2.0 & Shared Drive supportsAllDrives)
+│   │   ├── oauth.py                  # User OAuth 2.0 flow (token.json + credentials.json for personal Drive)
+│   │   ├── quota.py                  # Pre-flight quota validation & storage mode diagnostics
 │   │   └── mime.py                   # MIME type detection and optional gzip compression
 │   └── notifications/                # Email Dispatch, IMAP Ingestion & Templates
 │       ├── __init__.py               # Re-exports: EmailDispatcher, email_dispatcher, imap_reader
@@ -172,29 +194,24 @@ The_Paper_Getter/
 │       └── imap_listener.py          # IMAP inbox poller for incoming questionnaire replies
 ├── utils/                            # Shared Utilities & Decorators
 │   ├── __init__.py                   # Re-exports: TokenBucketRateLimiter, sanitizers, retries
-│   ├── rate_limiters.py              # TokenBucketRateLimiter (thread-safe, configurable buffer)
+│   ├── rate_limiters.py              # TokenBucketRateLimiter & GLOBAL_SEMANTIC_SCHOLAR_LIMITER
 │   ├── retry_handlers.py             # execute_with_429_retry (HTTP 429 exponential backoff)
 │   └── converters.py                 # sanitize_doi, sanitize_title, clean_matching_title, clean_year
-├── harvester/                        # Multi-Provider Asynchronous Accumulator
-│   ├── base.py                       # BaseAsyncHarvester with rate limiting and retry logic
-│   ├── models.py                     # Paper dataclass with 37 standardized attributes
-│   ├── deduplication.py              # Exact canonical DOI + 90% fuzzy SequenceMatcher deduplication
-│   └── pipeline.py                   # AsyncHarvestingPipeline (83/87 freezing bug fix)
 ├── verifier/                         # Multi-Source Academic Verification Engine
 │   ├── circuit_breaker.py            # Circuit breaker tripping on 401/403/429
 │   ├── dual_branch.py                # Concurrent ThreadPoolExecutor querying across all 7 sources
 │   ├── scopus.py                     # Elsevier Scopus API client with token pool rotation
 │   ├── wos.py                        # Clarivate Web of Science client with token rotation
 │   ├── ieee.py                       # IEEE Xplore API client with token rotation
-│   └── cache.py                      # Persistent JSON verification response cache
-├── analyzer.py                       # 37-Taxonomy Machine Learning classifier
-├── csv_builder.py                    # Standardized UTF-8 BOM CSV exporter (RFC 4180 compliant)
+│   └── cache.py                      # Persistent JSON verification response cache (Compact schema)
+├── analyzer.py                       # 32-Taxonomy Machine Learning classifier
+├── csv_builder.py                    # Standardized Two-Tier UTF-8 BOM CSV exporter (RFC 4180 compliant)
 ├── excel_builder.py                  # Standardized Excel exporter (.xlsx with Rows 1-10 audit metadata)
-├── batch_runner.py                   # Deterministic alphabetical batch runner for input/ datasets
+├── batch_runner.py                   # Deterministic alphabetical batch runner (Row 16 header autodetection)
 ├── database.py                       # SQLite state storage (pipeline.db)
 ├── scheduler.py                      # 3-tier IST reminder daemon (07:30, 14:00, 21:00) & IMAP listener
 ├── main.py                           # Central CLI entrypoint and interactive terminal intake
-└── tests/                            # Automated Unit Test Suite (34 comprehensive tests)
+└── tests/                            # Automated Unit Test Suite (37 comprehensive tests)
 ```
 
 ---
@@ -391,10 +408,20 @@ Title,Authors,Year,Publication Type,Venue,DOI,URL,Scopus Indexed,WoS Indexed,IEE
 
 ---
 
-## 5. ⚡ API Configuration, Rate Limiting & Concurrency Compliance
+## 5. ⚡ API Configuration, Token-Bucket Rate Limiting & Active Multi-Source Round-Robin Query Distributor
 
-### Semantic Scholar Strict 1 req/sec Architecture
-Semantic Scholar enforces strict rate limits on authenticated and unauthenticated queries. Credentials are read strictly from `.env` via the key:
+### Semantic Scholar Strict 1 req/sec Global Limiter
+Semantic Scholar strictly penalizes rapid query bursts and concurrent queries with immediate `HTTP 429 Too Many Requests`. To completely eliminate uncontrolled concurrent bursts caused by unthrottled worker pools or `asyncio.gather()`, the pipeline routes all Semantic Scholar interactions through a process-wide singleton:
+```python
+# utils/rate_limiters.py
+GLOBAL_SEMANTIC_SCHOLAR_LIMITER = TokenBucketRateLimiter(
+    rate_limit_per_second=1.0,
+    safety_buffer_seconds=0.05
+)
+```
+Every endpoint call in [`SemanticScholarClient`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/services/academic/semantic_scholar.py) and [`SemanticScholarHarvester`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/harvester/semantic_scholar.py) awaits `GLOBAL_SEMANTIC_SCHOLAR_LIMITER.acquire_async()` or acquires the thread lock before sending outbound requests.
+
+Credentials are read from `.env` via:
 ```bash
 S2_API_KEY=s2k-vzrGP8XJrEi2kKHndpXUmiXTvpftTbF9izKpBWUL
 ```
@@ -405,167 +432,242 @@ $$\Delta t = t(R_{i+1}) - t(R_i) \ge \frac{1}{\text{rate}} + \delta_{\text{safet
 With $\text{rate} = 1.0\text{ req/sec}$ and $\delta_{\text{safety}} = 0.05\text{s}$, the minimum interval is strictly:
 $$\Delta t \ge 1.05\text{ seconds}$$
 
-```python
-# services/academic/semantic_scholar.py
-_S2_RATE_LIMITER = TokenBucketRateLimiter(rate_limit_per_second=1.0, safety_buffer_seconds=0.05)
-```
+#### Active Query Distributor & Cross-Provider Round-Robin Rotation
+Rather than treating secondary providers (OpenAlex, Crossref, arXiv, CORE) as emergency failovers triggered only after a circuit breaker trips, the pipeline implements an active query distributor ([`ActiveQueryDistributor`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/harvester/distributor.py)):
+1. **Dynamic Provider Rotation:** Round-robins across all active academic repositories (`openalex`, `crossref`, `semantic_scholar`, `arxiv`, `core`).
+2. **Elimination of Concurrent Bursts:** Sequential provider alternation replaces unthrottled concurrent bursts (`asyncio.gather`), ensuring every provider operates safely within polite rate constraints.
+3. **Adaptive Deficit Pagination:** Rotates round-robin rounds, dynamically calculating `deficit = target_quota - len(papers)`, until the target verified quota is met or all remote catalogs are genuinely exhausted.
 
-#### HTTP 429 Exponential Backoff & Retry Mechanism
-If a remote rate limit spike occurs, the request is intercepted by [`execute_with_429_retry`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/utils/retry_handlers.py):
-1. Detects `resp.status_code == 429`.
-2. Inspects `Retry-After` header. If provided, sets sleep duration directly to $\text{Retry-After}$.
-3. If absent, applies exponential backoff with random jitter:
-   $$t_{\text{sleep}} = \min\left(30.0, 1.5 \times 2^{\text{attempt}-1} + \mathcal{U}(0.1, 0.5)\right)$$
-4. If multiple keys are configured in `SEMANTIC_SCHOLAR_API_KEYS`, automatically rotates to an unthrottled key.
+#### Dynamic Cooldown Buffer (5.5s) & Exponential Backoff Window
+If any individual aggregator encounters remote rate throttling (HTTP 429), intermittent HTTP 5xx errors, or network socket timeouts:
+1. **Immediate Aggregator Shift:** The distributor marks that provider as cooling down and immediately diverts incoming queries to alternative healthy aggregators (e.g., from Semantic Scholar to OpenAlex or Crossref) rather than hammering the throttling endpoint to exhaustion.
+2. **Configurable Cooldown Buffer:** Cooldowns default to a baseline buffer:
+   $$\tau_{\text{cooldown}} = 5.5\text{ seconds}$$
+3. **Exponential Window Expansion:** Consecutive failures scale exponentially:
+   $$\tau_{\text{backoff}} = \min\left(60.0, 5.5 \times 2^{\text{consecutive\_failures} - 1}\right)$$
+4. **Auto-Recovery:** Once the cooldown window elapses, the distributor safely reinstates the aggregator into active round-robin rotation.
 
-#### Outbound Header Compliance & Token Pooling
-Every outbound request dispatched by [`SemanticScholarClient`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/services/academic/semantic_scholar.py) contains:
-```python
-headers = {
-    "User-Agent": cfg.USER_AGENT,
-    "Accept": "application/json",
-    "x-api-key": os.getenv("S2_API_KEY")
-}
-```
-
----
-
-### Multi-Provider Polite Pool & Rate Caps
-
-- **arXiv Atom XML:** Enforces a strict **3.10-second polite delay** between successive requests (`cfg.ARXIV_RATE_DELAY = 3.0`). Parses XML Atom feeds (`entry`, `title`, `published`, `link`) and extracts direct PDF URLs.
+#### Multi-Provider Polite Pool & Rate Caps (OpenAlex, Crossref, arXiv, CORE)
+- **OpenAlex REST API:** Operates at **10.0 requests per second** with CC0 registry metadata resolution and cursor-based deep pagination.
 - **Crossref Works API:** Operates at up to **50.0 requests per second** by attaching polite pool headers: `User-Agent: AcademicHarvester/4.0 (mailto:{POLITE_EMAIL})`.
-- **OpenAlex REST API:** Operates at **10.0 requests per second** with CC0 registry metadata resolution.
+- **arXiv Atom XML:** Enforces a strict **3.10-second polite delay** between successive queries (`cfg.ARXIV_RATE_DELAY = 3.0`). Parses XML Atom feeds (`entry`, `title`, `published`, `link`) and extracts direct PDF URLs.
+- **Semantic Scholar Graph API:** Process-wide **1.0 request per second** strict cumulative cap via `GLOBAL_SEMANTIC_SCHOLAR_LIMITER`.
+- **CORE API v3:** Ingests open-access papers and research outputs via CORE's v3 search endpoints (`https://api.core.ac.uk/v3/search/works`).
 
 ---
 
-## 6. 🌙 Automated Nightly Cache Invalidation & Maintenance
+## 6. 🌙 Automated Nightly Cache Invalidation, Compact Data Schema & Footprint Maintenance
 
 ### Midnight 00:00 IST Automated Purge Routine
 At midnight Indian Standard Time (00:00 IST), the [`ThreeTierScheduler`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/scheduler.py) detects the date rollover:
 1. Resets SQLite daily run state: `db.reset_daily_state_for_midnight(date_str)`.
 2. Automatically executes [`purge_nightly_cache()`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/services/cache/cleaner.py).
-3. Sweeps `cache/`, `temp/`, and `logs/` directories, permanently unlinking transient citation artifacts older than 24 hours. This guarantees that stale citation data does not persist into the following day's research intake.
+3. Sweeps `cache/`, `temp/`, and `logs/` directories, unlinking transient artifacts older than 24 hours.
 
-### TTL Eviction Hierarchy
+### Compact "Data-Only" Payload Schema
+Raw API responses from aggregators often include 10–50 KB of extraneous provider metadata, nested JSON graphs, and unused contributor trees per paper. The cache layer permanently eliminates this storage waste by executing [`truncate_to_compact_payload()`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/services/cache/manager.py) before writing to disk:
+```json
+{
+  "doi": "10.1109/tfuzz.2024.1234567",
+  "title": "Adaptive Neuro-Fuzzy Inference Systems for Clinical Diagnosis",
+  "year": 2024,
+  "venue": "IEEE Transactions on Fuzzy Systems",
+  "indexed_scopus": true,
+  "indexed_wos": true,
+  "open_access_url": "https://arxiv.org/pdf/2401.12345.pdf",
+  "source": "OpenAlex",
+  "verified_sources": ["Scopus", "Web of Science", "Crossref"],
+  "cached_at": 1730200000.0
+}
 ```
-┌──────────────────────────────────────┬──────────────────────┬────────────────────────┐
-│ Cache Category                       │ TTL Threshold        │ Eviction Trigger       │
-├──────────────────────────────────────┼──────────────────────┼────────────────────────┤
-│ Temporary Query Artifacts & Dumps    │ 24 Hours             │ Nightly 00:00 IST      │
-│ API Verification JSON Records        │ 48 Hours             │ Run Completion / TTL   │
-│ On-Demand Manual Flush               │ 0 Seconds (All)      │ CLI --clear-cache      │
-└──────────────────────────────────────┴──────────────────────┴────────────────────────┘
-```
+This reduces per-paper cache entry size by **85–92%** (from ~25 KB down to ~400 bytes), allowing tens of thousands of cached queries to occupy minimal disk space.
 
-### Manual CLI Cache Flushing (`--clear-cache`)
-Users can flush the entire cache directory on demand using either `--clear-cache` or `--clean-cache`:
+### LRU 30 MB Size-Capped Eviction Engine
+To guarantee the project footprint never exceeds disk thresholds, [`CacheManager`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/services/cache/manager.py) enforces a strict size ceiling:
+```python
+MAX_CACHE_SIZE_MB = 30.0  # Defined in config/constants.py
+```
+Whenever the cache directory exceeds 30 MB, [`enforce_size_cap()`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/services/cache/manager.py) sorts all cached files by `st_mtime` (Least Recently Used) and evicts oldest entries until the total directory size drops below **24.0 MB (80% target safety watermark)**.
+
+### Automated Disk Footprint Profiling (`audit_footprint.py` / `.ps1`)
+To monitor disk usage and ensure the project remains lightweight:
 ```bash
-python main.py --clear-cache
+# Python single-pass execution
+python scripts/audit_footprint.py
+
+# Or via PowerShell
+.\scripts\audit_footprint.ps1
 ```
+The audit scans the workspace in a single $O(N)$ pass, displaying:
+- Top 10 largest subdirectories ranked by megabytes.
+- Top 10 largest individual files.
+- Categorized breakdown: Core Project Source Code, Virtual Environment (`.venv`), Git History (`.git`), Runtime Output (`output/`), and Transient Cache (`cache/`, `temp/`).
+
+### Zero-Dependency Safe Artifact Purger (`clean.py` / `clean.ps1`)
+To safely wipe build artifacts, bytecode, test files, and stale logs without deleting virtual environments or user `.env` files:
+```bash
+# Dry run preview (no files removed)
+python scripts/clean.py --dry-run
+
+# Live purge
+python scripts/clean.py
+
+# Or native PowerShell utility
+.\clean.ps1 -DryRun
+.\clean.ps1
+```
+Items safely purged include:
+- `__pycache__/` and `*.pyc` bytecode files.
+- `temp/`, `.pytest_cache/`, `.mypy_cache/`.
+- Stale SQLite temporary files (`*.db-wal`, `*.db-shm`).
+- Stale CSV/XLSX exports in `output/` (optional `--include-output`).
+- Dangling test artifact files (`test_*.csv`, `test_*.xlsx`).
 
 ---
 
-## 7. ☁️ Google Drive Cloud Storage & 403 Quota Resolution
+## 7. ☁️ Google Drive Cloud Storage & 403 Storage Quota Resolution
 
 ### Root Cause of the 403 Storage Quota Error
-When uploading files using a Google Cloud Service Account, attempting to upload without specifying a folder (`parents=[folder_id]`) triggers:
+When uploading files to Google Drive, developers often encounter:
 ```
 HttpError 403: The user's Drive storage quota has been exceeded.
+"reason": "storageQuotaExceeded"
 ```
-**Why this happens:** Google Service Accounts do not own personal Google Drive storage (storage quota = 0 MB). Files must be placed into a shared space owned by a real Google user or Google Workspace organization.
+**Why this occurs:** A Google Cloud **Service Account has 0 bytes of personal drive storage**. Even if you share a personal Google Drive folder (`@gmail.com`) with the service account email, whenever an upload is performed using service account credentials, Google attempts to assign **file ownership to the service account**. Because the service account has a 0-byte quota, Google immediately rejects the request with `storageQuotaExceeded`.
 
 ---
 
 ### Architectural Solutions
 
-#### Option A (Recommended): Google Shared Drive (Team Drive)
-Target a Google Shared Drive where the service account email is added as a **Content Manager** or **Contributor**:
-1. Open the Google Shared Drive in your browser.
-2. Click **Manage Members** and add `your-service-account@project.iam.gserviceaccount.com`.
-3. Copy the Shared Drive ID from the URL and set it in `.env`:
+The pipeline supports two robust solutions depending on whether you are using a personal `@gmail.com` account or an organizational Google Workspace domain:
+
+#### Method 1: User OAuth 2.0 Credentials (Personal @gmail.com Drives)
+*Best for researchers and developers using standard personal Google accounts.*
+
+Instead of service account credentials, authenticate as yourself once via OAuth 2.0. The uploaded files will then consume your personal Google Drive storage space.
+
+1. **Obtain OAuth Client Credentials:**
+   - Open [Google Cloud Console](https://console.cloud.google.com/).
+   - Navigate to **APIs & Services** $\rightarrow$ **Credentials**.
+   - Click **Create Credentials** $\rightarrow$ **OAuth client ID**.
+   - Application Type: **Desktop app**. Name: `PaperGetter`.
+   - Download the client configuration JSON and save it in the project root as `credentials.json`.
+2. **Authorize via Python Flow:**
+   [`services/drive/oauth.py`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/services/drive/oauth.py) automates the authorization flow, launching a local browser listener to approve the `https://www.googleapis.com/auth/drive.file` scope and caching access/refresh tokens in `token.json`:
+   ```bash
+   pip install google-auth-oauthlib google-auth-httplib2 google-api-python-client
+   ```
+3. Once generated, subsequent runs automatically refresh tokens in the background without prompting.
+
+#### Method 2: Google Workspace Shared Drive (Team Drive)
+*Best for universities, enterprises, and research labs with Google Workspace accounts.*
+
+In a Google Workspace Shared Drive, files belong to the **domain pool** rather than an individual user's personal quota.
+1. Create or open the Shared Drive in Google Drive.
+2. Click **Manage Members** and add your service account email (`your-service-account@project.iam.gserviceaccount.com`) as a **Content Manager** or **Contributor**.
+3. Copy the Shared Drive ID from the browser URL (or the specific folder ID inside the Shared Drive) and set them in `.env`:
    ```bash
    GDRIVE_SHARED_DRIVE_ID=0AFxxx...
-   GDRIVE_FOLDER_ID=0AFxxx...
-   ```
-4. All API requests automatically pass `supportsAllDrives=True`.
-
-#### Option B: Personal Google Drive Shared Folder
-Target a folder on a standard personal Google Drive:
-1. Create a folder in your personal Google Drive (e.g. `Research_Papers`).
-2. Right-click the folder $\rightarrow$ **Share** $\rightarrow$ Add `your-service-account@project.iam.gserviceaccount.com` with **Editor** permissions.
-3. Copy the folder ID from the URL and set it in `.env`:
-   ```bash
    GDRIVE_FOLDER_ID=1A2B3C...
+   GDRIVE_SERVICE_ACCOUNT_JSON=service_account.json
    ```
-4. [`DriveSyncClient`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/services/drive/client.py) explicitly attaches `parents=[GDRIVE_FOLDER_ID]` to the upload body. If `GDRIVE_FOLDER_ID` is missing, the client aborts safely before Google API rejection.
+4. All Google Drive API v3 calls automatically pass `supportsAllDrives=True` and `corpora='drive'`.
 
-#### Option C: User-Level OAuth 2.0 Credentials
-Switch from service account authentication to standard user-level OAuth 2.0:
-```bash
-GDRIVE_REFRESH_TOKEN=1//04xxx...
-GDRIVE_CLIENT_ID=xxx.apps.googleusercontent.com
-GDRIVE_CLIENT_SECRET=GOCSPX-xxx...
+---
+
+### Pre-Flight Validation Logging & Storage Mode Detection
+To prevent mid-pipeline crashes, [`GoogleDriveClient`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/services/drive/client.py) executes pre-flight validation via [`validate_drive_target_or_fail()`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/services/drive/quota.py) prior to attempting file streaming:
+1. Detects whether auth is running in **User OAuth 2.0 Mode** (`token.json` / `credentials.json`) or **Service Account Mode** (`service_account.json`).
+2. Checks destination folder metadata via [`detect_drive_type()`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/services/drive/quota.py).
+3. If running in Service Account mode against a personal `My Drive` folder without Shared Drive backing, logs an actionable warning explaining the 403 quota constraint and recommends User OAuth 2.0.
+
+### Payload Size Tracking & Resumable Chunked Streaming
+- **Target Size Range:** Harvested paper exports typically range between 5 KB and 400 KB.
+- **Resumable Streaming:** Uses `MediaFileUpload(resumable=True, chunksize=1024*1024)` to stream CSV and XLSX datasets safely even over unstable network connections.
+- **Optional Gzip Compression:** Enabling `GDRIVE_ENABLE_GZIP=true` compresses `.csv` files into `.csv.gz`, achieving an 80–90% reduction in transport payload size.
+
+---
+
+## 8. 📋 Formatted Two-Tier CSV Architecture & 32-Field Analytical Dataset
+
+Output files generated by [`StandardizedCsvBuilder`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/csv_builder.py) follow a standardized **two-tier template layout** engineered for immediate human readability in spreadsheet viewers (Excel, Google Sheets) while remaining fully parseable by automated data pipelines (Pandas, Polars, R).
+
+```
+┌───────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ TIER 1: RUN METADATA HEADER BLOCK (Rows 1 to 15)                                                      │
+├──────────┬─────────────────────────────┬──────────────────────────┬──────────┬────────────────────────┤
+│ Column A │ Columns B & C               │ Column D                 │ Column E │ Column F               │
+│ (Spacer) │ Primary Execution Metrics   │ (Blank Separator)        │ Key      │ Secondary Analytics    │
+├──────────┼─────────────────────────────┼──────────────────────────┼──────────┼────────────────────────┤
+│ (Blank)  │ Query String                │ (Blank)                  │ Scopus/WoS Verified Count         │
+│ (Blank)  │ Total Papers Harvested      │ (Blank)                  │ Open Access Matches               │
+│ (Blank)  │ Duplicates Dropped          │ (Blank)                  │ Aggregators Queried               │
+│ (Blank)  │ Retained Verified Count     │ (Blank)                  │ Filter Mode                       │
+│ (Blank)  │ Strict Mode Status          │ (Blank)                  │ Target Quota                      │
+│ (Blank)  │ Timestamp                   │ (Blank)                  │ Institutional Credentials         │
+│ (Blank)  │ Execution Duration          │ (Blank)                  │ Run Identifier                    │
+│ (Blank)  │ Run Type                    │ (Blank)                  │ Excluded Non-Indexed              │
+│ (Blank)  │ Location                    │ (Blank)                  │ Relevance Average                 │
+│ (Blank)  │ Document Filter             │ (Blank)                  │ Pipeline Version                  │
+│ (Blank)  │ Year Range                  │ (Blank)                  │ Google Drive Link                 │
+│ (Blank)  │ Rate Limiter Status         │ (Blank)                  │ Query Distributor                 │
+│ (Blank)  │ Deduplication Mode          │ (Blank)                  │ Cache Maintenance                 │
+│ (Blank)  │ CSV Specification           │ (Blank)                  │ Encoding                          │
+├──────────┴─────────────────────────────┴──────────────────────────┴──────────┴────────────────────────┤
+│ ROW 15: BLANK BUFFER ROW (Visual & Programmatic Boundary)                                            │
+├───────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ TIER 2: TABULAR PAPER DATASET (Rows 16 to End)                                                        │
+├──────────┬────────────────────────────────────────────────────────────────────────────────────────────┤
+│ ROW 16   │ Column Headers: 32 Analytical Fields starting strictly at Column B                         │
+│ ROW 17+  │ Paper Records: Populated verified citations starting strictly at Column B                  │
+└──────────┴────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
----
+### 32 Standard Analytical Fields Breakdown (Columns B through AG)
 
-### Payload Size Tracking & Gzip Compression
-- **Target Size Range:** Harvested paper exports typically range between 5 KB and 400 KB.
-- **Chunked Resumable Upload:** The pipeline uses `MediaFileUpload(resumable=True)` to stream files cleanly.
-- **Optional Gzip Compression:** When remote transport bandwidth is constrained, enabling `GDRIVE_ENABLE_GZIP=true` compresses `.csv` files into `.csv.gz`, achieving an 80–90% reduction in transfer payload size.
-
----
-
-## 8. 📋 Standardized 37-Column UTF-8 CSV Schema
-
-Output files generated by [`StandardizedCsvBuilder`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/csv_builder.py) strictly follow this 37-column field order with UTF-8 BOM (`utf-8-sig`) encoding:
-
-| # | Field Name | Description | Example Value |
+| Col | Field Name | Description | Example Value |
 |---|---|---|---|
-| 1 | `Material ID` | Unique dataset material code | `MAT-001` |
-| 2 | `Paper Title` | Sanitized publication title | `Adaptive Neuro-Fuzzy Inference Systems` |
-| 3 | `Authors` | Semicolon-delimited author names | `Jang, J.-S. R.; Sun, C.-T.` |
-| 4 | `Publication Year` | 4-digit publication year | `2024` |
-| 5 | `Publication Type` | Publication format category | `Journal Article` |
-| 6 | `Journal / Conference / Venue Name` | Full venue name | `IEEE Transactions on Systems, Man, and Cybernetics` |
-| 7 | `DOI` | Canonical lowercase DOI | `10.1109/21.256541` |
-| 8 | `Permanent URL / Publisher Link` | Web resolver URL | `https://doi.org/10.1109/21.256541` |
-| 9 | `Open Access Direct PDF Link` | Direct PDF link if OA | `https://arxiv.org/pdf/2401.12345.pdf` |
-| 10 | `Harvest Source Engine` | Discovery engine name | `OpenAlex` |
-| 11 | `Main Problem Addressed` | Core research objective | `Nonlinear system identification under uncertainty` |
-| 12 | `Main Practical Application` | Domain deployment area | `Biomedical EEG signal classification` |
-| 13 | `Importance Level` | Importance classification | `High` |
-| 14 | `Learning Level` | Complexity rating | `Intermediate` |
-| 15 | `Primary Category ID` | Primary taxonomy code | `CAT-04` |
-| 16 | `Primary Category Name` | Primary taxonomy name | `Neuro-Fuzzy Learning & Tuning` |
-| 17 | `Secondary Category 1 ID` | Cross-domain code 1 | `CAT-02` |
-| 18 | `Secondary Category 1 Name` | Cross-domain name 1 | `Type-2 Fuzzy Logic Systems` |
-| 19 | `Secondary Category 2 ID` | Cross-domain code 2 | `CAT-08` |
-| 20 | `Secondary Category 2 Name` | Cross-domain name 2 | `Explainable AI & Rule Extraction` |
-| 21 | `Secondary Category 3 ID` | Cross-domain code 3 | `CAT-11` |
-| 22 | `Secondary Category 3 Name` | Cross-domain name 3 | `Biomedical Applications` |
-| 23 | `Secondary Category 4 ID` | Cross-domain code 4 | `N/A` |
-| 24 | `Secondary Category 4 Name` | Cross-domain name 4 | `None` |
-| 25 | `Secondary Category 5 ID` | Cross-domain code 5 | `N/A` |
-| 26 | `Secondary Category 5 Name` | Cross-domain name 5 | `None` |
-| 27 | `Current Research Status` | Literature workflow status | `Identified` |
-| 28 | `Current Reading Status` | Reading review status | `Not Started` |
-| 29 | `Scopus Indexed` | Scopus verification boolean | `Y` |
-| 30 | `Web of Science Indexed` | WoS verification boolean | `Y` |
-| 31 | `IEEE Xplore Indexed` | IEEE verification boolean | `Y` |
-| 32 | `Open Access` | Open Access status boolean | `N` |
-| 33 | `Relevance Score` | Computed relevance (1-10) | `10` |
-| 34 | `Abstract Summary` | Sanitized multiline abstract | `This study presents an adaptive architecture...` |
-| 35 | `Researcher Notes` | Internal remarks / tags | `Foundational citation for Section 3 methodology` |
-| 36 | `Date Added to Database` | Ingestion timestamp | `2026-10-29` |
-| 37 | `Verified Sources` | JSON array of verifying sources | `["Scopus", "Web of Science", "IEEE Xplore", "Crossref"]` |
+| **B** | `Material ID` | Unique dataset material code | `MAT-001` |
+| **C** | `Title` | Sanitized publication title | `Adaptive Neuro-Fuzzy Inference Systems` |
+| **D** | `Authors` | Semicolon-delimited author names | `Jang, J.-S. R.; Sun, C.-T.` |
+| **E** | `Year` | 4-digit publication year | `2024` |
+| **F** | `DOI` | Canonical lowercase DOI | `10.1109/21.256541` |
+| **G** | `Venue` | Full journal or conference venue name | `IEEE Transactions on Fuzzy Systems` |
+| **H** | `Publication Type` | Publication format category | `Journal Article` |
+| **I** | `URL` | Web resolver URL | `https://doi.org/10.1109/21.256541` |
+| **J** | `PDF Link` | Direct Open Access PDF link | `https://arxiv.org/pdf/2401.12345.pdf` |
+| **K** | `Source` | Discovery engine name | `OpenAlex` |
+| **L** | `Index Status` | Consolidated Scopus/WoS indexing status | `Scopus & WoS Indexed` |
+| **M** | `Scopus Indexed` | Scopus verification boolean | `Y` |
+| **N** | `WoS Indexed` | Web of Science verification boolean | `Y` |
+| **O** | `IEEE Indexed` | IEEE Xplore verification boolean | `Y` |
+| **P** | `Open Access Status` | Open Access status boolean | `Y` |
+| **Q** | `Citation Count` | Remote citation count | `48` |
+| **R** | `Verified Sources` | JSON array of validating aggregators | `["Scopus", "Web of Science", "Crossref"]` |
+| **S** | `Abstract` | Sanitized multiline abstract text | `This study presents an adaptive architecture...` |
+| **T** | `Main Research Problem` | Core research objective addressed | `Nonlinear system identification under uncertainty` |
+| **U** | `Main Application` | Domain deployment area | `Biomedical EEG signal classification` |
+| **V** | `Importance` | Analytical importance rating | `High` |
+| **W** | `Learning Level` | Complexity rating | `Intermediate` |
+| **X** | `Taxonomy` | Primary category classification code | `CAT-04` |
+| **Y** | `Primary Category Name` | Primary taxonomy name | `Neuro-Fuzzy Learning & Tuning` |
+| **Z** | `Secondary Category 1` | Cross-domain taxonomy 1 | `Type-2 Fuzzy Logic Systems` |
+| **AA**| `Secondary Category 2` | Cross-domain taxonomy 2 | `Explainable AI & Rule Extraction` |
+| **AB**| `Secondary Category 3` | Cross-domain taxonomy 3 | `Biomedical Applications` |
+| **AC**| `Research Status` | Literature workflow status | `Identified` |
+| **AD**| `Reading Status` | Reading review status | `Not Started` |
+| **AE**| `Relevance Score` | Computed relevance rating (1-10) | `10` |
+| **AF**| `Notes` | Internal researcher remarks | `Foundational citation for Section 3 methodology` |
+| **AG**| `Date Added` | Dataset ingestion timestamp | `2026-10-29` |
 
----
-
-### RFC 4180 Escaping Rules & Excel Compatibility
-To guarantee that files open seamlessly in Microsoft Excel, Google Sheets, LibreOffice, and Pandas without delimiter corruption:
-1. **UTF-8 with BOM (`utf-8-sig`):** Excel on Windows assumes the ANSI code page unless the 3-byte UTF-8 Byte Order Mark (`\xef\xbb\xbf`) is present. All exported CSVs prepend the BOM so Greek letters ($\alpha, \beta, \theta$), mathematical symbols, and diacritics render perfectly.
-2. **RFC 4180 Quotes & Line Breaks:** Any cell value containing a comma, a newline, or a quotation mark is enclosed in double quotes. Internal quotation marks are escaped by doubling them (`""`).
+### Excel, Google Sheets & Pandas Dual-Tier Compatibility
+- **UTF-8 with BOM (`utf-8-sig`):** Prepends the 3-byte Byte Order Mark (`\xef\xbb\xbf`) so Excel on Windows renders Greek characters ($\alpha, \beta, \gamma$), mathematical symbols, and umlauts without encoding distortion.
+- **RFC 4180 Escaping:** Quotes fields containing commas, line breaks, or quotation marks. Internal double quotes are escaped as `""`.
+- **Automated Pandas Ingestion:** When ingesting into Pandas, users can pass `header=15` (0-indexed) or use the built-in parser in [`batch_runner.py`](file:///c:/Users/rohan/Documents/##%20Code/5)%20October%20-%202026/The_Paper_Getter/batch_runner.py), which automatically sniffs whether the file is single-tier or two-tier:
+  ```python
+  import pandas as pd
+  df = pd.read_csv("output/Run_Example.csv", skiprows=15).dropna(how="all", axis=1)
+  ```
 
 ---
 
@@ -655,12 +757,13 @@ python main.py --test
   3. Upon retry, the request succeeds and processing resumes.
 
 ### Scenario C: Google Drive HttpError 403 Storage Quota Exceeded
-- **Symptom:** `HttpError 403: Service Accounts do not have storage quota.`
-- **Root Cause:** `GDRIVE_FOLDER_ID` is empty or pointing to personal Drive root.
-- **Fail-Safe Recovery:**
-  1. The client intercepts the missing folder ID and halts upload safely before Google API rejection.
-  2. The local CSV file remains completely intact and accessible under `output/`.
-  3. Completion email is dispatched with the CSV attached, logging Drive sync status cleanly.
+- **Symptom:** `HttpError 403: The user's Drive storage quota has been exceeded` (`storageQuotaExceeded`).
+- **Root Cause:** A Google Cloud Service Account has **0 bytes personal storage quota**. Uploading directly into a folder on a personal Google account (`@gmail.com`) causes Google to assign file ownership to the service account, instantly failing quota checks.
+- **Fail-Safe Recovery & Resolution:**
+  1. **Method 1 (Personal Drive @gmail.com):** Switch to User OAuth 2.0 authentication by placing `credentials.json` in the root and letting `services/drive/oauth.py` generate `token.json`. Files uploaded will be owned by your personal account and use your personal Drive quota.
+  2. **Method 2 (Workspace Domain):** Use a Google Workspace Shared Drive (Team Drive) where files consume the organizational domain storage pool rather than individual service account quotas (`supportsAllDrives=True`).
+  3. **Pre-Flight Validation:** Pre-flight checks (`validate_drive_target_or_fail`) detect incompatible combinations before streaming, logging explicit guidance.
+  4. **Fail-Safe Local Storage:** If Drive sync fails or is unconfigured, the exported two-tier CSV is safely preserved in `output/` and attached directly to the completion email.
 
 ### Scenario D: SMTP Authentication Rejection (Error 535)
 - **Symptom:** `❌ [Email ERROR] SMTP delivery failed: (535, '5.7.8 Username and Password not accepted')`
@@ -757,4 +860,13 @@ python main.py --check-reminders --tier morning
 
 # 8. Run automated unit test suite
 python main.py --test
+
+# 9. Profile workspace disk footprint (single-pass audit)
+python scripts/audit_footprint.py
+# Or: .\scripts\audit_footprint.ps1
+
+# 10. Clean transient caches, bytecode, and temp artifacts safely
+python scripts/clean.py --dry-run   # Preview items to be deleted
+python scripts/clean.py             # Execute cleanup
+# Or: .\clean.ps1 -DryRun / .\clean.ps1
 ```

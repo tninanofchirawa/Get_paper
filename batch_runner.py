@@ -80,8 +80,18 @@ class ResilientBatchRunner:
         print(f"\n📂 [Batch Ingest] Starting file: '{file_path.name}'")
 
         try:
-            # 1. Read CSV safely
-            df = pd.read_csv(file_path, dtype=str, keep_default_na=False, encoding_errors="replace")
+            # 1. Read CSV safely (detects both single-tier and two-tier Row 16 headers)
+            header_idx = 0
+            with open(file_path, "r", encoding="utf-8-sig", errors="replace") as f_peek:
+                first_lines = [f_peek.readline() for _ in range(25)]
+            for i, line in enumerate(first_lines):
+                if "Title" in line and ("DOI" in line or "Authors" in line or "Material ID" in line):
+                    header_idx = i
+                    break
+
+            df = pd.read_csv(file_path, skiprows=header_idx, dtype=str, keep_default_na=False, encoding_errors="replace")
+            # Drop empty spacer columns like Column A
+            df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
             if df.empty:
                 logger.warning(f"[Batch Worker] '{file_path.name}' contains 0 data rows.")
                 db.update_file_status(file_str, "COMPLETED", processed_count=0, verified_count=0)

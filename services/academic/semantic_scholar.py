@@ -17,7 +17,7 @@ from typing import Optional, Dict, Any, List, Tuple
 import requests
 
 from config import cfg
-from utils.rate_limiters import TokenBucketRateLimiter
+from utils.rate_limiters import TokenBucketRateLimiter, GLOBAL_SEMANTIC_SCHOLAR_LIMITER
 from utils.retry_handlers import execute_with_429_retry
 from utils.circuit_breaker import CircuitBreaker
 
@@ -25,7 +25,7 @@ logger = logging.getLogger("SemanticScholarClient")
 
 # Global singleton rate limiter across all Semantic Scholar endpoints:
 # Strict 1 request per second with 0.05s safety buffer (1.05s total interval)
-_S2_RATE_LIMITER = TokenBucketRateLimiter(rate_limit_per_second=1.0, safety_buffer_seconds=0.05)
+_S2_RATE_LIMITER = GLOBAL_SEMANTIC_SCHOLAR_LIMITER
 
 
 class SemanticScholarClient:

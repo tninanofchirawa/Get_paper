@@ -1,5 +1,5 @@
 """
-harvester/pipeline.py - Asynchronous accumulator pipeline fixing the 83/87 item freezing bug.
+harvester/pipeline.py - Asynchronous literature harvesting pipeline with round-robin provider rotation.
 Unified Academic Paper Harvester, Verifier & Notification Pipeline.
 """
 
@@ -16,6 +16,8 @@ from harvester.openalex import OpenAlexHarvester
 from harvester.crossref import CrossrefHarvester
 from harvester.arxiv import ArxivHarvester
 from harvester.semantic_scholar import SemanticScholarHarvester
+from harvester.core_ac import CoreHarvester
+from harvester.distributor import ActiveQueryDistributor, ProviderState
 from harvester.deduplication import DeduplicationEngine
 
 logger = logging.getLogger("HarvestingPipeline")
@@ -23,9 +25,14 @@ logger = logging.getLogger("HarvestingPipeline")
 
 class AsyncHarvestingPipeline:
     """
-    Coordinates multi-provider parallel harvesting via an asynchronous accumulator loop.
-    Guarantees active pagination until `len(unique_papers) >= target_quota` OR all providers are exhausted.
-    Eliminates the 83/87 item freezing bug.
+    Coordinates multi-source literature harvesting via active provider rotation.
+    Features:
+    - Active Query Distribution: Cycles across OpenAlex, Crossref, Semantic Scholar,
+      arXiv, and CORE instead of treating them as emergency-only circuit-breaker fallbacks.
+    - Global Cumulative Rate Limiting: Respects strict 1 req/sec limit on Semantic Scholar endpoints.
+    - Dynamic Cooldown: 5.5s safety buffer with exponential scaling, immediately rotating to alternate
+      aggregators when an API hits rate limits or returns empty.
+    - Active Accumulator Loop: Eliminates pagination freezes by continuing across providers until target quota.
     """
 
     def __init__(self, harvesters: Optional[List[BaseAsyncHarvester]] = None):
@@ -36,7 +43,8 @@ class AsyncHarvestingPipeline:
                 OpenAlexHarvester(),
                 CrossrefHarvester(),
                 SemanticScholarHarvester(),
-                ArxivHarvester()
+                ArxivHarvester(),
+                CoreHarvester()
             ]
 
     async def harvest(
@@ -50,110 +58,79 @@ class AsyncHarvestingPipeline:
         session: Optional[aiohttp.ClientSession] = None
     ) -> Tuple[List[Paper], Dict[str, int]]:
         """
-        Executes active accumulator pagination across all providers.
+        Executes active round-robin query rotation across academic aggregators.
         Returns: (retained_unique_papers, metrics_dict)
         """
         deduper = DeduplicationEngine(similarity_threshold=0.90)
-        provider_states: Dict[str, Dict[str, Any]] = {}
+        distributor = ActiveQueryDistributor(self.harvesters)
 
-        for h in self.harvesters:
-            provider_states[h.name] = {
-                "harvester": h,
-                "page_token": None,
-                "has_more": True,
-                "fetched_count": 0,
-                "consecutive_empty": 0
-            }
-
-        logger.info(f"=== Starting Active Accumulator Harvest | Query: '{query}' | Target Quota: {target_quota} ===")
-        print(f"[Pipeline] Starting Active Accumulator Harvest | Query: '{query}' | Target: {target_quota} papers ({quota_strictness} mode)")
+        logger.info(f"=== Starting Active Round-Robin Harvest | Query: '{query}' | Quota: {target_quota} ===")
+        print(f"[Pipeline] Starting Active Round-Robin Harvest | Query: '{query}' | Target: {target_quota} papers ({quota_strictness} mode)")
 
         round_num = 0
-        max_empty_rounds = 4
 
-        async def _execute_accumulator(active_session):
+        async def _execute_distributor(active_session: aiohttp.ClientSession):
             nonlocal round_num
+
             while len(deduper.unique_papers) < target_quota:
                 round_num += 1
-                active_providers = [
-                    p for p in provider_states.values()
-                    if p["has_more"] and p["consecutive_empty"] < max_empty_rounds
-                ]
 
-                if not active_providers:
+                if distributor.is_all_exhausted():
                     logger.info("[Pipeline] All provider queries exhausted. Ending accumulator loop.")
                     print("[Pipeline] All provider queries exhausted. Ending accumulator loop.")
                     break
 
+                provider_state, wait_sec = distributor.select_next_provider()
+                if not provider_state:
+                    # All active providers currently in cooldown
+                    sleep_duration = max(0.1, min(wait_sec, 2.0))
+                    logger.debug(f"[Pipeline] All providers in cooldown. Waiting {sleep_duration:.2f}s...")
+                    await asyncio.sleep(sleep_duration)
+                    continue
+
+                h: BaseAsyncHarvester = provider_state.harvester
                 deficit = target_quota - len(deduper.unique_papers)
-                chunk_per_provider = max(25, int((deficit / len(active_providers)) * 1.35))
-                chunk_per_provider = min(chunk_per_provider, 100)
+                chunk_size = max(25, min(100, int(deficit * 1.25)))
 
-                async def fetch_provider_chunk(state: Dict[str, Any]):
-                    h: BaseAsyncHarvester = state["harvester"]
-                    try:
-                        papers, next_token, has_more = await h.fetch_page(
-                            session=active_session,
-                            query=query,
-                            page_token=state["page_token"],
-                            page_size=chunk_per_provider,
-                            year_range=year_range,
-                            doc_filter=doc_filter
+                try:
+                    logger.debug(f"[Pipeline] Querying '{h.name}' for chunk of {chunk_size}...")
+                    papers, next_token, has_more = await h.fetch_page(
+                        session=active_session,
+                        query=query,
+                        page_token=provider_state.page_token,
+                        page_size=chunk_size,
+                        year_range=year_range,
+                        doc_filter=doc_filter
+                    )
+
+                    if not papers:
+                        distributor.record_empty(provider_state)
+                    else:
+                        distributor.record_success(provider_state, papers, next_token, has_more)
+                        raw_added, dups_dropped, unique_count = deduper.add_papers(papers)
+                        print(
+                            f"  -> [{h.name}] +{len(papers)} raw ({raw_added - dups_dropped} unique) | "
+                            f"Progress: {unique_count}/{target_quota} (Duplicates dropped: {deduper.duplicates_removed_count})"
                         )
-                        state["page_token"] = next_token
-                        state["has_more"] = has_more
-                        state["fetched_count"] += len(papers)
-                        if len(papers) == 0:
-                            state["consecutive_empty"] += 1
-                        else:
-                            state["consecutive_empty"] = 0
-                        return h.name, papers
-                    except Exception as e:
-                        logger.error(f"[{h.name}] Fetch chunk failed: {e}")
-                        state["consecutive_empty"] += 1
-                        return h.name, []
 
-                tasks = [fetch_provider_chunk(s) for s in active_providers]
-                batch_results = await asyncio.gather(*tasks)
+                        if progress_callback:
+                            progress_callback(query, len(deduper.unique_papers), target_quota)
 
-                round_raw_count = 0
-                for provider_name, papers in batch_results:
-                    round_raw_count += len(papers)
-                    if papers:
-                        deduper.add_papers(papers)
+                except Exception as e:
+                    distributor.record_failure(provider_state, e)
 
-                logger.info(
-                    f"[Round {round_num}] Fetched {round_raw_count} raw entries. "
-                    f"Total Unique Retained: {len(deduper.unique_papers)} / {target_quota}"
-                )
-                print(
-                    f"  -> Round {round_num}: +{round_raw_count} raw entries | "
-                    f"Progress: {len(deduper.unique_papers)}/{target_quota} unique retained "
-                    f"(Duplicates dropped: {deduper.duplicates_removed_count})"
-                )
-
-                if progress_callback:
-                    progress_callback(query, len(deduper.unique_papers), target_quota)
-
-                if quota_strictness.lower() in ("fast", "fast/capped", "capped") and round_num >= 1:
-                    logger.info("[Pipeline] Capped mode enabled: stopping after initial harvest pass.")
-                    print("[Pipeline] Capped mode enabled: stopping after initial harvest pass.")
+                if quota_strictness.lower() in ("fast", "fast/capped", "capped") and round_num >= len(self.harvesters):
+                    logger.info("[Pipeline] Capped mode enabled: stopping after initial round-robin pass.")
+                    print("[Pipeline] Capped mode enabled: stopping after initial round-robin pass.")
                     break
 
-                if round_raw_count == 0:
-                    all_exhausted = all(not p["has_more"] or p["consecutive_empty"] >= max_empty_rounds for p in provider_states.values())
-                    if all_exhausted:
-                        logger.info("[Pipeline] All providers have zero further records. Terminating accumulator.")
-                        break
-
         if session is not None:
-            await _execute_accumulator(session)
+            await _execute_distributor(session)
         else:
             connector = aiohttp.TCPConnector(limit=25, ttl_dns_cache=300)
             async with aiohttp.ClientSession(connector=connector) as managed_session:
-                await _execute_accumulator(managed_session)
+                await _execute_distributor(managed_session)
 
-        # Trim strictly to target_quota if requested, while retaining deduplication logs
         final_papers = deduper.unique_papers[:target_quota]
         metrics = {
             "raw_scraped": deduper.raw_scraped_count,

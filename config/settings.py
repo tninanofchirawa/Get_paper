@@ -22,6 +22,7 @@ from config.constants import (
     DEFAULT_TIMEOUT,
     MAX_RETRIES,
     BACKOFF_FACTOR,
+    MAX_CACHE_SIZE_MB,
 )
 
 # Ensure environment variables are loaded
@@ -112,6 +113,7 @@ class PipelineConfig:
     TEMP_DIR: str = os.getenv("TEMP_DIR", str(BASE_DIR / "temp"))
     CONFIG_DIR: str = os.getenv("CONFIG_DIR", str(BASE_DIR / "config"))
     APP_TIMEZONE: str = os.getenv("APP_TIMEZONE", "Asia/Kolkata")
+    MAX_CACHE_SIZE_MB: float = float(os.getenv("MAX_CACHE_SIZE_MB", str(MAX_CACHE_SIZE_MB)))
 
     @property
     def has_scopus_credentials(self) -> bool:

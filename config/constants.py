@@ -25,3 +25,4 @@ BACKOFF_FACTOR: float = 1.5
 CACHE_TTL_HOURS: int = 48
 CACHE_TTL_SECONDS: int = 48 * 3600
 NIGHTLY_PURGE_HOUR: int = 0  # 00:00 midnight
+MAX_CACHE_SIZE_MB: float = 30.0  # Strict LRU directory ceiling

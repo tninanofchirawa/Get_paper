@@ -331,7 +331,7 @@ def main():
 
     args = parser.parse_args()
 
-    if args.clear_cache or args.clean_cache:
+    if args.clear_cache:
         purge_nightly_cache(force_all=True)
     elif args.scheduler:
         from scheduler import scheduler

@@ -1,9 +1,9 @@
 """
 tests/test_csv_and_drive.py - Unit tests for:
-1. Standardized UTF-8 CSV builder (schema, field order, escaping, Verified Sources column).
-2. Dynamic run identifier mapping across CSV, Drive title, and Email subject/body.
-3. Google Drive API v3 sync & storage quota 403 error prevention (Option A, B, C, supportsAllDrives=True).
-4. Email service delivery reliability across SMTP/Mailgun/SendGrid with non-crashing exception handling.
+1. Standardized Two-Tier UTF-8 CSV builder (Rows 1-15 Metadata Block, Row 16 Headers at Col B across 32 analytical fields, Row 17+ Records at Col B).
+2. RFC 4180 escaping and UTF-8 with BOM encoding.
+3. Google Drive API v3 sync & storage quota 403 error prevention (Method 1 User OAuth 2.0, Method 2 Shared Drive, supportsAllDrives=True).
+4. Email service delivery reliability across SMTP with non-crashing exception handling.
 """
 
 import os
@@ -32,30 +32,38 @@ class TestStandardizedCsvBuilder(unittest.TestCase):
             except Exception:
                 pass
 
-    def test_csv_table_headers_and_field_order(self):
-        """Validates all 37 columns are present in exact schema order."""
-        headers = StandardizedCsvBuilder.TABLE_HEADERS
-        self.assertEqual(len(headers), 37)
-        self.assertEqual(headers[0], "Material ID")
-        self.assertEqual(headers[1], "Title")
-        self.assertEqual(headers[2], "Authors")
-        self.assertEqual(headers[3], "Publication Year")
-        self.assertEqual(headers[4], "Journal/Source")
-        self.assertEqual(headers[5], "Publication Type")
-        self.assertEqual(headers[6], "DOI")
-        self.assertEqual(headers[7], "URL")
-        self.assertEqual(headers[8], "PDF Link")
-        self.assertEqual(headers[9], "Source")
-        self.assertEqual(headers[10], "Scopus Indexed (Y/N)")
-        self.assertEqual(headers[11], "WoS Indexed (Y/N)")
-        self.assertEqual(headers[12], "IEEE Indexed (Y/N)")
-        self.assertEqual(headers[13], "OpenAccess (Y/N)")
-        self.assertEqual(headers[14], "Verified Sources")
-        self.assertEqual(headers[15], "Abstract / Short Summary")
-        self.assertEqual(headers[36], "Date Added")
+    def test_csv_32_analytical_fields(self):
+        """Validates all 32 analytical columns are present in exact schema order."""
+        fields = StandardizedCsvBuilder.ANALYTICAL_FIELDS_32
+        self.assertEqual(len(fields), 32)
+        self.assertEqual(fields[0], "Material ID")
+        self.assertEqual(fields[1], "Title")
+        self.assertEqual(fields[2], "Authors")
+        self.assertEqual(fields[3], "Year")
+        self.assertEqual(fields[4], "DOI")
+        self.assertEqual(fields[5], "Venue")
+        self.assertEqual(fields[6], "Publication Type")
+        self.assertEqual(fields[7], "URL")
+        self.assertEqual(fields[8], "PDF Link")
+        self.assertEqual(fields[9], "Source")
+        self.assertEqual(fields[10], "Index Status")
+        self.assertEqual(fields[11], "Scopus Indexed")
+        self.assertEqual(fields[12], "WoS Indexed")
+        self.assertEqual(fields[13], "IEEE Indexed")
+        self.assertEqual(fields[14], "Open Access Status")
+        self.assertEqual(fields[15], "Citation Count")
+        self.assertEqual(fields[16], "Verified Sources")
+        self.assertEqual(fields[17], "Abstract")
+        self.assertEqual(fields[31], "Date Added")
 
-    def test_escaping_and_utf8_generation(self):
-        """Verifies multiline text, commas, quotation marks, and UTF-8 characters are escaped cleanly."""
+    def test_two_tier_layout_and_escaping(self):
+        """
+        Verifies the complete two-tier template:
+        - Tier 1: Rows 1-15 Metadata Block (Cols B & C Primary Metrics, Col D Blank, Cols E & F Secondary Analytics, Row 15 buffer).
+        - Tier 2: Row 16 Headers starting at Col B across 32 analytical fields.
+        - Row 17+: Paper record starting at Col B.
+        - UTF-8 with BOM & RFC 4180 quote escaping.
+        """
         paper = Paper(
             title='Complex "Fuzzy" Logic & α-Cuts, Part 1',
             authors="Zadeh, L. A.; Bellman, R. E.",
@@ -69,12 +77,21 @@ class TestStandardizedCsvBuilder(unittest.TestCase):
             wos_indexed=True,
             ieee_indexed=True,
             open_access=False,
+            citation_count=42,
             verified_sources=["Scopus", "Web of Science", "Crossref"],
             abstract='Line 1 with "quotes" and, commas.\nLine 2 with math: θ = 0.5 & α-cuts.'
         )
         analyzed = PaperAnalyzer.analyze_paper(paper, query="fuzzy logic", material_idx=1)
 
-        run_config = {"run_name": "Test_Escaping_Run_01"}
+        run_config = {
+            "run_name": "Test_TwoTier_Run_01",
+            "topics": ["Fuzzy Logic Systems"],
+            "harvest_quota": 100,
+            "only_indexed": True,
+            "duration": "12.4s",
+            "location": "Home",
+            "target_repos": ["Scopus", "OpenAlex", "Crossref"]
+        }
         metrics = {"raw_scraped": 10, "duplicates_removed": 1, "verified_retained": 1}
 
         csv_path = StandardizedCsvBuilder.generate_csv(
@@ -91,26 +108,51 @@ class TestStandardizedCsvBuilder(unittest.TestCase):
             reader = csv.reader(f)
             rows = list(reader)
 
-        self.assertEqual(len(rows), 2)  # Header + 1 Data row
-        header_row = rows[0]
-        data_row = rows[1]
+        # Total rows: 15 (Metadata) + 1 (Row 16 Headers) + 1 (Row 17 Data) = 17 rows
+        self.assertEqual(len(rows), 17)
 
-        self.assertEqual(header_row, StandardizedCsvBuilder.TABLE_HEADERS)
-        self.assertEqual(data_row[0], "M-0001")
-        self.assertEqual(data_row[1], 'Complex "Fuzzy" Logic & α-Cuts, Part 1')
-        self.assertEqual(data_row[6], "10.1109/tfuzz.2024.123456")
-        self.assertEqual(data_row[10], "Y")
-        self.assertEqual(data_row[11], "Y")
-        self.assertEqual(data_row[12], "Y")
-        self.assertEqual(data_row[13], "N")
+        # Check Row 1 (Index 0): Col B = Query String, Col D = Blank, Col E = Scopus/WoS Verified Count
+        row_1 = rows[0]
+        self.assertEqual(row_1[0], "")  # Col A blank
+        self.assertEqual(row_1[1], "Query String")
+        self.assertEqual(row_1[2], "Fuzzy Logic Systems")
+        self.assertEqual(row_1[3], "")  # Col D blank separator
+        self.assertEqual(row_1[4], "Scopus/WoS Verified Count")
+        self.assertEqual(row_1[5], "1")
+
+        # Check Row 15 (Index 14): Blank buffer row before tabular data
+        row_15 = rows[14]
+        self.assertTrue(all(val == "" for val in row_15))
+
+        # Check Row 16 (Index 15): Data column headers strictly on Row 16, beginning at Column B
+        row_16 = rows[15]
+        self.assertEqual(row_16[0], "")  # Col A blank
+        self.assertEqual(row_16[1:], StandardizedCsvBuilder.ANALYTICAL_FIELDS_32)
+        self.assertEqual(len(row_16[1:]), 32)
+
+        # Check Row 17 (Index 16): Paper record strictly on Row 17, beginning at Column B
+        row_17 = rows[16]
+        self.assertEqual(row_17[0], "")  # Col A blank
+        self.assertEqual(row_17[1], "M-0001")
+        self.assertEqual(row_17[2], 'Complex "Fuzzy" Logic & α-Cuts, Part 1')
+        self.assertEqual(row_17[3], "Zadeh, L. A.; Bellman, R. E.")
+        self.assertEqual(row_17[4], "2024")
+        self.assertEqual(row_17[5], "10.1109/tfuzz.2024.123456")
+        self.assertEqual(row_17[6], "IEEE Transactions on Fuzzy Systems, Vol. 32")
+        self.assertEqual(row_17[11], "Indexed (Scopus, WoS, IEEE)")  # Index Status
+        self.assertEqual(row_17[12], "Y")  # Scopus
+        self.assertEqual(row_17[13], "Y")  # WoS
+        self.assertEqual(row_17[14], "Y")  # IEEE
+        self.assertEqual(row_17[15], "N")  # Open Access
+        self.assertEqual(row_17[16], "42") # Citation Count
 
         # Verified Sources column validation
-        v_sources = json.loads(data_row[14])
+        v_sources = json.loads(row_17[17])
         self.assertEqual(v_sources, ["Scopus", "Web of Science", "Crossref"])
 
-        # Multiline abstract integrity
-        self.assertIn('Line 1 with "quotes" and, commas.', data_row[15])
-        self.assertIn("Line 2 with math: θ = 0.5 & α-cuts.", data_row[15])
+        # Multiline abstract integrity & quotes escaping
+        self.assertIn('Line 1 with "quotes" and, commas.', row_17[18])
+        self.assertIn("Line 2 with math: θ = 0.5 & α-cuts.", row_17[18])
 
 
 class TestGoogleDriveStorageAndQuota(unittest.TestCase):
@@ -121,14 +163,12 @@ class TestGoogleDriveStorageAndQuota(unittest.TestCase):
         client.auth_mode = "service_account"
         client.service_account_email = "test-service-acct@test.iam.gserviceaccount.com"
 
-        # Create temporary file
         temp_file = "output/temp_quota_test.csv"
         os.makedirs("output", exist_ok=True)
         with open(temp_file, "w", encoding="utf-8") as f:
             f.write("A,B\n1,2\n")
 
         try:
-            # Must return None and log prevention message
             file_id = client.upload_file(temp_file)
             self.assertIsNone(file_id)
             client.service.files().create.assert_not_called()
@@ -165,7 +205,6 @@ class TestGoogleDriveStorageAndQuota(unittest.TestCase):
                 self.assertEqual(file_id, "drive_file_999")
                 self.assertEqual(client.get_last_link(), "https://drive.google.com/file/d/drive_file_999/view")
 
-                # Check files().create kwargs
                 mock_files.create.assert_called_once()
                 call_kwargs = mock_files.create.call_args[1]
                 self.assertTrue(call_kwargs.get("supportsAllDrives"))
@@ -179,12 +218,43 @@ class TestGoogleDriveStorageAndQuota(unittest.TestCase):
                 except Exception:
                     pass
 
+    def test_user_oauth_mode_preflight_success(self):
+        """Verifies that User OAuth 2.0 mode passes pre-flight checks and uploads under user account ownership."""
+        client = GoogleDriveClient(folder_id="")
+        mock_files = MagicMock()
+        mock_create = MagicMock()
+        mock_create.execute.return_value = {
+            "id": "oauth_file_111",
+            "name": "OAuth_Run.csv",
+            "webViewLink": "https://drive.google.com/file/d/oauth_file_111/view"
+        }
+        mock_files.create.return_value = mock_create
+        client.service = MagicMock()
+        client.service.files.return_value = mock_files
+        client.auth_mode = "oauth_user"
+
+        temp_file = "output/temp_oauth_test.csv"
+        os.makedirs("output", exist_ok=True)
+        with open(temp_file, "w", encoding="utf-8") as f:
+            f.write("A,B\n1,2\n")
+
+        try:
+            with patch("drive_sync.MediaFileUpload"):
+                file_id = client.upload_file(temp_file, custom_filename="OAuth_Run.csv")
+                self.assertEqual(file_id, "oauth_file_111")
+                mock_files.create.assert_called_once()
+        finally:
+            if os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                except Exception:
+                    pass
+
 
 class TestEmailReliabilityAndMetrics(unittest.TestCase):
     def test_non_crashing_email_exception_handling(self):
         """Verifies email failures do not crash execution or throw unhandled exceptions."""
         dispatcher = EmailDispatcher(provider="smtp")
-        # Force an invalid SMTP host to trigger network failure
         with patch("smtplib.SMTP", side_effect=ConnectionRefusedError("Connection refused")):
             success = dispatcher._send_smtp(
                 subject="Test Failure",
@@ -195,7 +265,6 @@ class TestEmailReliabilityAndMetrics(unittest.TestCase):
             )
             self.assertFalse(success)
 
-            # High-level send method must also catch exceptions safely
             safe_result = dispatcher.send("Test Safe", "<p>Safe</p>")
             self.assertFalse(safe_result)
 

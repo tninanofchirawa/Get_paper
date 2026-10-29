@@ -85,6 +85,8 @@ class Paper:
     open_access: Optional[bool] = None
     verification_source: str = ""
     verified_sources: List[str] = field(default_factory=list)
+    citation_count: int = 0
+    index_status: str = ""
 
     # Analytical / Materials Database metadata
     material_id: str = ""
@@ -124,6 +126,25 @@ class Paper:
 
         if self.abstract:
             self.abstract = re.sub(r"\s+", " ", html.unescape(self.abstract)).strip()
+
+    @property
+    def computed_index_status(self) -> str:
+        """Returns consolidated indexing status summary string."""
+        if self.index_status:
+            return self.index_status
+        indexed = []
+        if self.scopus_indexed:
+            indexed.append("Scopus")
+        if self.wos_indexed:
+            indexed.append("WoS")
+        if self.ieee_indexed:
+            indexed.append("IEEE")
+        if indexed:
+            return f"Indexed ({', '.join(indexed)})"
+        if self.publication_type == "Preprint":
+            return "Preprint"
+        return "Non-Indexed"
+
 
     def to_verified_row(self) -> Dict[str, Any]:
         """Maps record to standard Row 11+ output columns."""

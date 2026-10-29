@@ -46,6 +46,56 @@ class TestCacheCleaner(unittest.TestCase):
         self.assertFalse(os.path.exists(self.stale_file))
         self.assertTrue(os.path.exists(self.fresh_file))
 
+    def test_lru_size_capped_eviction(self):
+        """Verifies that exceeding the size ceiling evicts oldest files by LRU."""
+        from services.cache.manager import CacheManager
+        f1 = os.path.join(self.test_cache_dir, "f1.json")
+        f2 = os.path.join(self.test_cache_dir, "f2.json")
+        f3 = os.path.join(self.test_cache_dir, "f3.json")
+
+        with open(f1, "w") as f:
+            f.write("x" * 1024)
+        with open(f2, "w") as f:
+            f.write("y" * 1024)
+        with open(f3, "w") as f:
+            f.write("z" * 1024)
+
+        os.utime(f1, (time.time() - 300, time.time() - 300))
+        os.utime(f2, (time.time() - 200, time.time() - 200))
+        os.utime(f3, (time.time() - 100, time.time() - 100))
+
+        mgr = CacheManager(cache_dir=self.test_cache_dir)
+        evicted = mgr.enforce_size_cap(max_bytes=2100)
+        self.assertGreaterEqual(evicted, 1)
+        self.assertFalse(os.path.exists(f1))
+        self.assertTrue(os.path.exists(f3))
+
+    def test_compact_data_only_payload_truncation(self):
+        """Verifies raw API payload dumps with huge author graphs/references are truncated."""
+        from services.cache.manager import truncate_to_compact_payload
+        raw_payload = {
+            "doi": "10.1109/53.1",
+            "title": "Fuzzy Systems Control",
+            "year": "2024",
+            "venue": "IEEE TFS",
+            "indexed_scopus": True,
+            "indexed_wos": False,
+            "open_access_url": "https://example.com/oa.pdf",
+            "raw_reference_list": [{"id": f"ref_{i}", "citations": [1, 2, 3]} for i in range(500)],
+            "full_author_graph": [{"name": f"Author_{i}", "h_index": 20, "institutions": ["A", "B"]} for i in range(100)],
+            "telemetry_data": {"ip": "1.2.3.4", "session_token": "abc"}
+        }
+        compact = truncate_to_compact_payload(raw_payload)
+        self.assertEqual(compact["doi"], "10.1109/53.1")
+        self.assertEqual(compact["title"], "Fuzzy Systems Control")
+        self.assertEqual(compact["year"], 2024)
+        self.assertTrue(compact["indexed_scopus"])
+        self.assertFalse(compact["indexed_wos"])
+        self.assertEqual(compact["open_access_url"], "https://example.com/oa.pdf")
+        self.assertNotIn("raw_reference_list", compact)
+        self.assertNotIn("full_author_graph", compact)
+        self.assertNotIn("telemetry_data", compact)
+
 
 class TestEmailConfigParser(unittest.TestCase):
     def test_parse_rich_morning_questionnaire_template(self):
