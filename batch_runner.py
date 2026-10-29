@@ -24,6 +24,7 @@ from harvester.models import Paper, sanitize_doi
 from verifier.dual_branch import DualBranchVerifier
 from analyzer import PaperAnalyzer
 from excel_builder import StandardizedExcelBuilder
+from csv_builder import StandardizedCsvBuilder
 from cache_cleaner import purge_stale_cache
 
 logger = logging.getLogger("BatchRunner")
@@ -120,8 +121,10 @@ class ResilientBatchRunner:
                     abstract=abstract
                 ))
 
-            # 3. Verify batch records
-            verified_papers = self.verifier.verify_batch(papers)
+            # 3. Verify batch records (supporting strict Scopus/WoS filtering if requested)
+            only_indexed = run_config.get("only_indexed", False)
+            verified_papers = self.verifier.verify_batch(papers, only_indexed=only_indexed)
+            excluded_count = getattr(self.verifier, "last_excluded_count", 0)
 
             # 4. Enrich taxonomy and analysis categories
             topic_label = file_path.stem.replace("_materials_database", "").replace("_", " ").title()
@@ -130,17 +133,18 @@ class ResilientBatchRunner:
                 ap = PaperAnalyzer.analyze_paper(p, query=topic_label, material_idx=idx)
                 analyzed_papers.append(ap)
 
-            # 5. Output standardized Excel workbook
-            out_name = f"{file_path.stem}_verified.xlsx"
+            # 5. Output standardized UTF-8 CSV
+            out_name = f"{file_path.stem}_verified.csv"
             out_path = os.path.join(cfg.OUTPUT_DIR, out_name)
 
             metrics = {
                 "raw_scraped": len(papers),
                 "duplicates_removed": len(df) - len(papers),
-                "verified_retained": len(analyzed_papers)
+                "verified_retained": len(analyzed_papers),
+                "excluded_non_indexed": excluded_count
             }
 
-            StandardizedExcelBuilder.generate_workbook(
+            StandardizedCsvBuilder.generate_csv(
                 papers=analyzed_papers,
                 run_config={**run_config, "main_topic": topic_label},
                 metrics=metrics,

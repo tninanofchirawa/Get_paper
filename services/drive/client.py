@@ -1,0 +1,212 @@
+"""
+services/drive/client.py - Google Drive API v3 Client with Multi-Auth & Quota Management.
+Unified Academic Paper Harvester, Verifier & Notification Pipeline.
+
+Implements:
+- Option A: Shared Drive (supportsAllDrives=True)
+- Option B: Shared Personal Drive folder
+- Option C: OAuth 2.0 user credentials or Workspace domain delegation
+- Chunked resumable uploads with payload size logging (5 KB - 400 KB)
+- Optional gzip compression via services.drive.mime
+"""
+
+import os
+import sys
+import json
+import logging
+from pathlib import Path
+from typing import Optional, Dict, Any
+
+from config import cfg
+from services.drive.mime import get_mime_and_stream
+from services.drive.quota import validate_upload_quota_preconditions
+
+logger = logging.getLogger("DriveClient")
+
+try:
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaFileUpload
+    from google.oauth2 import service_account
+    from google.oauth2.credentials import Credentials as OAuthCredentials
+    GOOGLE_DRIVE_INSTALLED = True
+except ImportError:
+    GOOGLE_DRIVE_INSTALLED = False
+
+
+class GoogleDriveClient:
+    """Manages automated uploads to Google Drive using Drive API v3."""
+
+    def __init__(
+        self,
+        folder_id: Optional[str] = None,
+        service_account_path: Optional[str] = None
+    ):
+        self.folder_id = folder_id if folder_id is not None else cfg.GDRIVE_FOLDER_ID
+        self.shared_drive_id = cfg.GDRIVE_SHARED_DRIVE_ID
+        self.service_account_path = service_account_path or cfg.GDRIVE_SERVICE_ACCOUNT_JSON
+        self.service = None
+        self.auth_mode: str = "none"
+        self.service_account_email: str = ""
+        self.last_upload_info: Dict[str, Any] = {}
+        self._init_service()
+
+    def _init_service(self):
+        """Initializes Drive API v3 service across Option A/B or Option C."""
+        if not GOOGLE_DRIVE_INSTALLED:
+            logger.warning("[DriveClient] Google API client libraries not installed.")
+            return
+
+        scopes = ["https://www.googleapis.com/auth/drive"]
+
+        # Option C1: User-level OAuth 2.0 refresh token
+        if cfg.GDRIVE_REFRESH_TOKEN and cfg.GDRIVE_CLIENT_ID and cfg.GDRIVE_CLIENT_SECRET:
+            try:
+                creds = OAuthCredentials(
+                    None,
+                    refresh_token=cfg.GDRIVE_REFRESH_TOKEN,
+                    token_uri="https://oauth2.googleapis.com/token",
+                    client_id=cfg.GDRIVE_CLIENT_ID,
+                    client_secret=cfg.GDRIVE_CLIENT_SECRET,
+                    scopes=scopes
+                )
+                self.service = build("drive", "v3", credentials=creds)
+                self.auth_mode = "oauth_user"
+                logger.info("[DriveClient] Initialized via Option C (User OAuth Refresh Token).")
+                print("☁️ [Drive Sync] Authenticated via Option C (User OAuth Refresh Token).")
+                return
+            except Exception as e:
+                logger.warning(f"[DriveClient] Option C User OAuth init failed: {e}")
+
+        # Option A & B: Service Account credentials
+        sa_info = None
+        if cfg.GDRIVE_SERVICE_ACCOUNT_RAW:
+            try:
+                sa_info = json.loads(cfg.GDRIVE_SERVICE_ACCOUNT_RAW)
+            except Exception:
+                pass
+        elif os.path.exists(self.service_account_path):
+            try:
+                with open(self.service_account_path, "r", encoding="utf-8") as f:
+                    sa_info = json.load(f)
+            except Exception:
+                pass
+
+        if sa_info:
+            self.service_account_email = sa_info.get("client_email", "")
+            try:
+                if cfg.GDRIVE_DELEGATED_USER:
+                    creds = service_account.Credentials.from_service_account_info(
+                        sa_info,
+                        scopes=scopes,
+                        subject=cfg.GDRIVE_DELEGATED_USER
+                    )
+                    self.auth_mode = "domain_delegation"
+                    logger.info(f"[DriveClient] Domain-wide delegation for user: {cfg.GDRIVE_DELEGATED_USER}")
+                else:
+                    creds = service_account.Credentials.from_service_account_info(
+                        sa_info,
+                        scopes=scopes
+                    )
+                    self.auth_mode = "service_account"
+
+                self.service = build("drive", "v3", credentials=creds)
+                logger.info(f"[DriveClient] Service account authenticated: {self.service_account_email}")
+                print(f"☁️ [Drive Sync] Service Account loaded: {self.service_account_email}")
+
+                if not self.folder_id and not self.shared_drive_id:
+                    print("⚠️ [Drive Sync Notice] GDRIVE_FOLDER_ID not set. Service accounts do NOT have personal root storage quota.")
+            except Exception as e:
+                logger.warning(f"[DriveClient] Service account initialization error: {e}")
+
+    def upload_file(
+        self,
+        file_path: str,
+        target_folder_id: Optional[str] = None,
+        custom_filename: Optional[str] = None
+    ) -> Optional[str]:
+        """Uploads file to Google Drive with supportsAllDrives=True and quota error prevention."""
+        if not os.path.exists(file_path):
+            logger.error(f"[DriveClient] Local file not found: {file_path}")
+            return None
+
+        folder = target_folder_id or self.folder_id or self.shared_drive_id
+
+        if not validate_upload_quota_preconditions(self.auth_mode, folder, self.service_account_email):
+            return None
+
+        if not self.service:
+            logger.warning("[DriveClient] Google Drive service not initialized.")
+            return None
+
+        file_size_bytes = os.path.getsize(file_path)
+        file_size_kb = file_size_bytes / 1024.0
+        upload_title = custom_filename or os.path.basename(file_path)
+
+        mime_type, actual_path, is_compressed = get_mime_and_stream(file_path, enable_gzip=cfg.GDRIVE_ENABLE_GZIP)
+
+        file_metadata: Dict[str, Any] = {
+            "name": upload_title,
+        }
+        if folder:
+            file_metadata["parents"] = [folder]
+
+        print(f"\n☁️ [Drive Sync] Preparing upload for: '{upload_title}'")
+        print(f"  📦 Payload Size   : {file_size_bytes} bytes ({file_size_kb:.2f} KB)")
+        print(f"  🔐 Auth Mode      : {self.auth_mode.upper()}")
+        print(f"  📂 Target Folder  : {folder if folder else '[Root - Quota Warning]'}")
+
+        try:
+            media = MediaFileUpload(
+                actual_path,
+                mimetype=mime_type,
+                resumable=True
+            )
+
+            print(f"  🚀 Uploading stream via Drive API v3 (supportsAllDrives=True)...")
+            uploaded_file = self.service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields="id, name, webViewLink, webContentLink, size",
+                supportsAllDrives=True
+            ).execute()
+
+            file_id = uploaded_file.get("id")
+            web_link = uploaded_file.get("webViewLink") or f"https://drive.google.com/file/d/{file_id}/view"
+
+            self.last_upload_info = {
+                "file_id": file_id,
+                "title": upload_title,
+                "link": web_link,
+                "size_bytes": file_size_bytes,
+                "folder_id": folder
+            }
+
+            print(f"  ✅ [Drive Sync OK] Upload Successful!")
+            print(f"  📄 File Title : {upload_title}")
+            print(f"  🆔 File ID    : {file_id}")
+            print(f"  🔗 Link       : {web_link}")
+
+            # Clean temporary gzip file if created
+            if is_compressed and actual_path != file_path and os.path.exists(actual_path):
+                try:
+                    os.remove(actual_path)
+                except Exception:
+                    pass
+
+            return file_id
+
+        except Exception as e:
+            err_msg = str(e)
+            if "storage quota" in err_msg.lower() or "403" in err_msg:
+                print(f"❌ [Drive Sync Quota Error] Google 403: {err_msg}")
+            else:
+                print(f"❌ [Drive Sync Error] Upload failed: {err_msg}")
+            logger.error(f"[DriveClient] Upload failed: {e}")
+            return None
+
+    def get_last_link(self) -> Optional[str]:
+        return self.last_upload_info.get("link")
+
+
+# Global singleton instance
+drive_client = GoogleDriveClient()

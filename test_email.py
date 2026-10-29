@@ -25,6 +25,7 @@ from email_service import email_dispatcher, get_ist_now
 from harvester.models import Paper
 from analyzer import PaperAnalyzer
 from excel_builder import StandardizedExcelBuilder
+from csv_builder import StandardizedCsvBuilder
 
 
 def test_morning_intake(recipient: str, date_str: str):
@@ -68,9 +69,9 @@ def test_correction_notice(recipient: str, date_str: str):
 def test_completion_report(recipient: str, date_str: str):
     print(f"\n5️⃣ [Dispatching] ✅ Run Completion & Dispatch Report to {recipient}...")
 
-    # Generate or reuse a sample Excel workbook for attachment
+    # Generate sample standardized CSV file for attachment
     os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
-    sample_excel = os.path.join(cfg.OUTPUT_DIR, f"Test_Run_{date_str}_verified.xlsx")
+    sample_csv = os.path.join(cfg.OUTPUT_DIR, f"Test_Run_{date_str}_verified.csv")
 
     sample_papers = [
         Paper(
@@ -84,6 +85,7 @@ def test_completion_report(recipient: str, date_str: str):
             wos_indexed=True,
             ieee_indexed=True,
             open_access=False,
+            verified_sources=["Scopus", "Web of Science", "IEEE Xplore"],
             verification_source="Elsevier Scopus, WoS Expanded, IEEE Xplore"
         ),
         Paper(
@@ -97,7 +99,8 @@ def test_completion_report(recipient: str, date_str: str):
             wos_indexed=True,
             ieee_indexed=False,
             open_access=True,
-            verification_source="Local Scopus DB, OpenAlex Registry"
+            verified_sources=["Scopus", "OpenAlex", "Crossref"],
+            verification_source="Local Scopus DB, OpenAlex Registry, Crossref"
         )
     ]
 
@@ -121,25 +124,31 @@ def test_completion_report(recipient: str, date_str: str):
         "raw_scraped": 284,
         "duplicates_removed": 34,
         "verified_retained": 250,
+        "excluded_non_indexed": 12,
         "duration_seconds": 84,
         "scopus_hits": 218,
         "wos_hits": 194,
         "ieee_hits": 142,
-        "open_access_hits": 96
+        "crossref_hits": 180,
+        "open_access_hits": 96,
+        "arxiv_hits": 24,
+        "semantic_scholar_hits": 110,
+        "drive_link": "https://drive.google.com/file/d/sample_test_drive_id/view"
     }
 
-    StandardizedExcelBuilder.generate_workbook(
+    StandardizedCsvBuilder.generate_csv(
         papers=analyzed,
         run_config=run_config,
         metrics=metrics,
-        output_filepath=sample_excel
+        output_filepath=sample_csv
     )
 
     success = email_dispatcher.send_run_completion_report(
         run_config=run_config,
         metrics=metrics,
-        excel_path=sample_excel,
+        csv_path=sample_csv,
         papers=analyzed,
+        drive_link=metrics["drive_link"],
         recipient=recipient
     )
     status = "✅ SENT" if success else "❌ FAILED"

@@ -99,7 +99,7 @@ class TestAccumulatorLoopFix(unittest.IsolatedAsyncioTestCase):
         pipeline = AsyncHarvestingPipeline(harvesters=[mock_h])
 
         target_quota = 85
-        results, metrics = await pipeline.harvest(query="test", target_quota=target_quota)
+        results, metrics = await pipeline.harvest(query="test", target_quota=target_quota, session=MagicMock())
 
         self.assertEqual(len(results), target_quota)
         self.assertEqual(metrics["raw_scraped"], 100)

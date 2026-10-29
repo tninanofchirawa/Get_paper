@@ -24,11 +24,12 @@ if hasattr(sys.stderr, "reconfigure"):
 
 from config import cfg
 from database import db
-from cache_cleaner import purge_stale_cache
+from services.cache.cleaner import purge_stale_cache, purge_nightly_cache
 from harvester.pipeline import AsyncHarvestingPipeline
 from verifier.dual_branch import DualBranchVerifier
 from analyzer import PaperAnalyzer
 from excel_builder import StandardizedExcelBuilder
+from csv_builder import StandardizedCsvBuilder
 from batch_runner import ResilientBatchRunner
 from drive_sync import drive_client
 from email_service import email_dispatcher
@@ -41,11 +42,13 @@ async def run_spontaneous(
     year_range: str = "All Years",
     doc_filter: str = "All",
     quota_strictness: str = "Strict",
+    only_indexed: bool = False,
+    run_name_override: str = None,
     output_path: str = None
 ) -> str:
-    """Executes single query literature harvesting, dual-branch verification, and report generation."""
+    """Executes single query literature harvesting, multi-source academic verification, and CSV generation."""
     run_id = f"run_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    run_name = f"Run_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    run_name = run_name_override or f"Run_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     run_config = {
         "run_name": run_name,
@@ -57,7 +60,8 @@ async def run_spontaneous(
         "doc_filter": doc_filter,
         "inst_token_flag": inst_token,
         "quota_strictness": quota_strictness,
-        "target_repos": ["Scopus", "Web of Science", "IEEE Xplore", "OpenAlex", "Crossref"] if inst_token else ["OpenAlex", "Crossref"]
+        "only_indexed": only_indexed,
+        "target_repos": ["Scopus", "Web of Science", "IEEE Xplore", "OpenAlex", "Crossref", "arXiv"] if inst_token else ["OpenAlex", "Crossref", "arXiv"]
     }
 
     db.log_run_start(run_id, run_name, run_config)
@@ -66,7 +70,8 @@ async def run_spontaneous(
     print("=" * 76)
     print(f"🔍 Query           : {query}")
     print(f"🎯 Target Quota    : {target_quota} papers")
-    print(f"🏛️ Institutional   : {'Enabled (Scopus/WoS/IEEE)' if inst_token else 'Open Access Fallback (OpenAlex/Crossref/Local DB)'}")
+    print(f"🏛️ Institutional   : {'Enabled (Scopus/WoS/IEEE)' if inst_token else 'Open Access Fallback (OpenAlex/Crossref/arXiv/Local DB)'}")
+    print(f"🎯 Strict Filtering: {'Enabled (Scopus/WoS Only)' if only_indexed else 'Disabled (Broad Open Access Fallbacks)'}")
     print(f"⚡ Mode             : {quota_strictness}")
     print("=" * 76 + "\n")
 
@@ -81,8 +86,9 @@ async def run_spontaneous(
         quota_strictness=quota_strictness
     )
 
-    print(f"\n🔍 [Verification] Verifying {len(papers)} candidate papers across dual branches...")
-    verified_papers = verifier.verify_batch(papers)
+    print(f"\n🔍 [Verification] Concurrently verifying {len(papers)} candidate papers across academic aggregators...")
+    verified_papers = verifier.verify_batch(papers, only_indexed=only_indexed)
+    excluded_count = verifier.last_excluded_count
 
     print(f"📊 [Analysis] Enriching records with taxonomy classifications and analytical metadata...")
     analyzed_papers = []
@@ -90,22 +96,29 @@ async def run_spontaneous(
         ap = PaperAnalyzer.analyze_paper(p, query=query, material_idx=idx)
         analyzed_papers.append(ap)
 
-    out_file = output_path or os.path.join(cfg.OUTPUT_DIR, f"{run_name}.xlsx")
+    out_file = output_path or os.path.join(cfg.OUTPUT_DIR, f"{run_name}.csv")
+    if out_file.lower().endswith(".xlsx"):
+        out_file = out_file[:-5] + ".csv"
+
     final_metrics = {
         "raw_scraped": metrics["raw_scraped"],
         "duplicates_removed": metrics["duplicates_removed"],
-        "verified_retained": len(analyzed_papers)
+        "verified_retained": len(analyzed_papers),
+        "excluded_non_indexed": excluded_count
     }
 
-    excel_path = StandardizedExcelBuilder.generate_workbook(
+    # Primary export: Standardized UTF-8 CSV
+    csv_path = StandardizedCsvBuilder.generate_csv(
         papers=analyzed_papers,
         run_config=run_config,
         metrics=final_metrics,
         output_filepath=out_file
     )
 
-    # Google Drive v3 upload if configured
-    drive_id = drive_client.upload_file(excel_path)
+    # Google Drive v3 upload if configured (with supportsAllDrives=True and payload size validation)
+    drive_id = drive_client.upload_file(csv_path, custom_filename=f"{run_name}.csv")
+    drive_link = drive_client.get_last_link()
+    final_metrics["drive_link"] = drive_link
 
     # Log completion in SQLite
     db.log_run_completion(
@@ -114,33 +127,42 @@ async def run_spontaneous(
         duplicates_removed=final_metrics["duplicates_removed"],
         verified_retained=final_metrics["verified_retained"],
         failed_calls=0,
-        excel_path=excel_path,
+        excel_path=csv_path,
         drive_file_id=drive_id,
         status="COMPLETED"
     )
     db.mark_daily_run_completed()
 
-    # Dispatch completion email via Gmail SMTP
-    email_dispatcher.send_run_completion_report(
-        run_config=run_config,
-        metrics=final_metrics,
-        excel_path=excel_path,
-        papers=analyzed_papers
-    )
+    # Dispatch completion email with robust exception handling
+    try:
+        email_dispatcher.send_run_completion_report(
+            run_config=run_config,
+            metrics=final_metrics,
+            csv_path=csv_path,
+            papers=analyzed_papers,
+            drive_link=drive_link,
+            drive_file_id=drive_id
+        )
+    except Exception as e:
+        print(f"⚠️ [Email Dispatch Warning] Could not deliver email report: {e} (Drive sync & logs preserved).")
 
     # Clean cache immediately following completed run
     purge_stale_cache()
 
     print("\n" + "=" * 76)
     print("🎉 EXECUTION COMPLETE SUMMARY:")
-    print(f"• Total Raw Scraped       : {final_metrics['raw_scraped']}")
-    print(f"• Total Duplicates Removed: {final_metrics['duplicates_removed']}")
-    print(f"• Verified Papers Retained: {final_metrics['verified_retained']}")
-    print(f"• Excel Output Generated  : {excel_path}")
+    print(f"• Run Name                 : {run_name}")
+    print(f"• Total Raw Scraped        : {final_metrics['raw_scraped']}")
+    print(f"• Total Duplicates Removed : {final_metrics['duplicates_removed']}")
+    print(f"• Verified Papers Retained : {final_metrics['verified_retained']}")
+    print(f"• Excluded Non-Indexed     : {excluded_count}")
+    print(f"• Standard CSV Generated   : {csv_path}")
     if drive_id:
-        print(f"• Google Drive File ID    : {drive_id}")
+        print(f"• Google Drive File ID     : {drive_id}")
+        if drive_link:
+            print(f"• Google Drive Link        : {drive_link}")
     print("=" * 76 + "\n")
-    return excel_path
+    return csv_path
 
 
 def interactive_terminal_intake():
@@ -198,6 +220,9 @@ def interactive_terminal_intake():
         inst_in = input(f"[13/15] Enable Institutional Token (Scopus/WoS/IEEE)? (y/N, default: {'Y' if has_inst else 'N'}): ").strip().lower()
         inst_token = inst_in in ("y", "yes") if inst_in else has_inst
 
+        oi_in = input("[14/15] Filter for indexed-only papers (Scopus / Web of Science)? [y/N]: ").strip().lower()
+        only_indexed = oi_in in ("y", "yes", "1")
+
         print("[15/15] Quota Strictness: [1] Strict (Paginate until quota met)  [2] Fast/Capped")
         st_sel = input("Choice (default: 1): ").strip()
         quota_strictness = "Strict" if st_sel != "2" else "Fast/Capped"
@@ -208,7 +233,9 @@ def interactive_terminal_intake():
             inst_token=inst_token,
             year_range=year_range,
             doc_filter=doc_filter,
-            quota_strictness=quota_strictness
+            quota_strictness=quota_strictness,
+            only_indexed=only_indexed,
+            run_name_override=run_name
         ))
 
     except (KeyboardInterrupt, EOFError):
@@ -248,14 +275,19 @@ def interactive_menu():
         q = input("Enter research query [default: 'fuzzy neural networks']: ").strip() or "fuzzy neural networks"
         quota_in = input("Enter target quota [default: 250]: ").strip()
         quota = int(quota_in) if quota_in.isdigit() else 250
-        asyncio.run(run_spontaneous(query=q, target_quota=quota))
+        oi_in = input("Filter for indexed-only papers (Scopus/WoS)? [y/N]: ").strip().lower()
+        only_idx = oi_in in ("y", "yes", "1")
+        asyncio.run(run_spontaneous(query=q, target_quota=quota, only_indexed=only_idx))
     elif choice == "3":
         runner = ResilientBatchRunner()
+        oi_in = input("Filter for indexed-only papers in batch (Scopus/WoS)? [y/N]: ").strip().lower()
+        only_idx = oi_in in ("y", "yes", "1")
         run_config = {
             "run_name": f"Batch_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}",
             "run_type": "Batch File Run",
             "location": "Home",
             "is_batch": True,
+            "only_indexed": only_idx,
             "inst_token_flag": cfg.has_institutional_credentials
         }
         runner.run_all(f"batch_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}", run_config)
@@ -288,17 +320,19 @@ def main():
     parser = argparse.ArgumentParser(description="Unified Academic Paper Harvester, Verifier & 100% Gmail-Driven Pipeline")
     parser.add_argument("--query", type=str, help="Search query for literature harvesting")
     parser.add_argument("--quota", type=int, default=250, help="Target paper quota")
+    parser.add_argument("--run-name", type=str, help="Dynamic run name / query identifier across CSV, Drive, and Email")
+    parser.add_argument("--only-indexed", action="store_true", help="Filter for indexed-only papers (Scopus or Web of Science)")
     parser.add_argument("--all", "--batch", action="store_true", help="Process all datasets in input/ directory")
     parser.add_argument("--scheduler", action="store_true", help="Launch 3-tier IST reminder scheduler and IMAP listener daemon")
     parser.add_argument("--test", action="store_true", help="Run automated test suite")
-    parser.add_argument("--clean-cache", action="store_true", help="Execute 48-hour cache purging manually")
+    parser.add_argument("--clear-cache", "--clean-cache", action="store_true", help="Flush cache directory and transient artifacts on demand")
     parser.add_argument("--check-reminders", action="store_true", help="Check and dispatch pending reminders")
     parser.add_argument("--tier", type=str, help="Force reminder tier (morning, afternoon, night)")
 
     args = parser.parse_args()
 
-    if args.clean_cache:
-        purge_stale_cache()
+    if args.clear_cache or args.clean_cache:
+        purge_nightly_cache(force_all=True)
     elif args.scheduler:
         from scheduler import scheduler
         asyncio.run(scheduler.run_daemon())
@@ -313,14 +347,20 @@ def main():
     elif args.all:
         runner = ResilientBatchRunner()
         run_config = {
-            "run_name": f"Batch_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}",
+            "run_name": args.run_name or f"Batch_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}",
             "run_type": "Batch File Run",
             "is_batch": True,
+            "only_indexed": args.only_indexed,
             "inst_token_flag": cfg.has_institutional_credentials
         }
         runner.run_all(f"batch_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}", run_config)
     elif args.query:
-        asyncio.run(run_spontaneous(query=args.query, target_quota=args.quota))
+        asyncio.run(run_spontaneous(
+            query=args.query,
+            target_quota=args.quota,
+            only_indexed=args.only_indexed,
+            run_name_override=args.run_name
+        ))
     else:
         sys.exit(interactive_menu())
 

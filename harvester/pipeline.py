@@ -46,7 +46,8 @@ class AsyncHarvestingPipeline:
         year_range: Optional[str] = None,
         doc_filter: Optional[str] = None,
         quota_strictness: str = "Strict",
-        progress_callback: Optional[Callable[[str, int, int], None]] = None
+        progress_callback: Optional[Callable[[str, int, int], None]] = None,
+        session: Optional[aiohttp.ClientSession] = None
     ) -> Tuple[List[Paper], Dict[str, int]]:
         """
         Executes active accumulator pagination across all providers.
@@ -70,9 +71,8 @@ class AsyncHarvestingPipeline:
         round_num = 0
         max_empty_rounds = 4
 
-        connector = aiohttp.TCPConnector(limit=25, ttl_dns_cache=300)
-        async with aiohttp.ClientSession(connector=connector) as session:
-            # Active accumulator loop: Keep running until quota met OR all providers exhausted
+        async def _execute_accumulator(active_session):
+            nonlocal round_num
             while len(deduper.unique_papers) < target_quota:
                 round_num += 1
                 active_providers = [
@@ -86,7 +86,6 @@ class AsyncHarvestingPipeline:
                     break
 
                 deficit = target_quota - len(deduper.unique_papers)
-                # Calculate batch chunk per active provider with 35% redundancy to overcome deduplication drops
                 chunk_per_provider = max(25, int((deficit / len(active_providers)) * 1.35))
                 chunk_per_provider = min(chunk_per_provider, 100)
 
@@ -94,7 +93,7 @@ class AsyncHarvestingPipeline:
                     h: BaseAsyncHarvester = state["harvester"]
                     try:
                         papers, next_token, has_more = await h.fetch_page(
-                            session=session,
+                            session=active_session,
                             query=query,
                             page_token=state["page_token"],
                             page_size=chunk_per_provider,
@@ -114,7 +113,6 @@ class AsyncHarvestingPipeline:
                         state["consecutive_empty"] += 1
                         return h.name, []
 
-                # Execute page fetch across active providers concurrently
                 tasks = [fetch_provider_chunk(s) for s in active_providers]
                 batch_results = await asyncio.gather(*tasks)
 
@@ -137,18 +135,23 @@ class AsyncHarvestingPipeline:
                 if progress_callback:
                     progress_callback(query, len(deduper.unique_papers), target_quota)
 
-                # In Fast/Capped mode, stop after first round of harvesting
                 if quota_strictness.lower() in ("fast", "fast/capped", "capped") and round_num >= 1:
                     logger.info("[Pipeline] Capped mode enabled: stopping after initial harvest pass.")
                     print("[Pipeline] Capped mode enabled: stopping after initial harvest pass.")
                     break
 
-                # If no papers were added this round across all providers, check if exhausted
                 if round_raw_count == 0:
                     all_exhausted = all(not p["has_more"] or p["consecutive_empty"] >= max_empty_rounds for p in provider_states.values())
                     if all_exhausted:
                         logger.info("[Pipeline] All providers have zero further records. Terminating accumulator.")
                         break
+
+        if session is not None:
+            await _execute_accumulator(session)
+        else:
+            connector = aiohttp.TCPConnector(limit=25, ttl_dns_cache=300)
+            async with aiohttp.ClientSession(connector=connector) as managed_session:
+                await _execute_accumulator(managed_session)
 
         # Trim strictly to target_quota if requested, while retaining deduplication logs
         final_papers = deduper.unique_papers[:target_quota]

@@ -59,6 +59,8 @@ class TestBatchRunner(unittest.TestCase):
         and does NOT silently drop file 3 and 4!
         """
         runner = ResilientBatchRunner()
+        # Fast local verification mock to prevent network timeouts during batch unit testing
+        runner.verifier.verify_batch = lambda papers, **kwargs: papers
         run_id = "test_batch_run_4files"
         queue = ResilientBatchRunner.get_deterministic_file_queue(self.test_dir)
 

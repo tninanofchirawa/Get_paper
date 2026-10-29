@@ -17,12 +17,24 @@ logger = logging.getLogger("ScopusVerifier")
 
 
 class ScopusVerifier:
-    """Verifies paper indexing against Elsevier Scopus Search API."""
+    """Verifies paper indexing against Elsevier Scopus Search API with token pooling."""
 
     def __init__(self, circuit_breaker: CircuitBreaker):
         self.circuit_breaker = circuit_breaker
         self.last_query_time = 0.0
         self.session = requests.Session()
+        self.key_pool = cfg.get_key_pool("elsevier")
+        self.current_key_idx = 0
+
+    def _rotate_key(self):
+        if len(self.key_pool) > 1:
+            self.current_key_idx += 1
+            logger.info(f"[Scopus] Rotated API key in pool (index {self.current_key_idx % len(self.key_pool)})")
+
+    def _get_api_key(self) -> str:
+        if self.key_pool:
+            return self.key_pool[self.current_key_idx % len(self.key_pool)]
+        return cfg.ELSEVIER_API_KEY
 
     def _wait_snail_pace(self):
         """Enforces minimum 1.2s delay strictly for Scopus queries."""
@@ -46,6 +58,7 @@ class ScopusVerifier:
         url = f"https://api.elsevier.com/content/search/scopus?query={urllib.parse.quote(query)}&count=1"
 
         headers = cfg.get_http_headers("scopus")
+        headers["X-ELS-APIKey"] = self._get_api_key()
 
         try:
             resp = self.session.get(url, headers=headers, timeout=15)
@@ -55,6 +68,7 @@ class ScopusVerifier:
                 total = int(data.get("search-results", {}).get("opensearch:totalResults", "0"))
                 return total > 0
             elif resp.status_code in (401, 403, 429):
+                self._rotate_key()
                 self.circuit_breaker.record_failure(resp.status_code, resp.text[:100])
                 return None
             else:

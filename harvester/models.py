@@ -5,6 +5,7 @@ Unified Academic Paper Harvester, Verifier & Notification Pipeline.
 
 import re
 import html
+import json
 import datetime
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional, Dict, Any
@@ -83,6 +84,7 @@ class Paper:
     ieee_indexed: Optional[bool] = None
     open_access: Optional[bool] = None
     verification_source: str = ""
+    verified_sources: List[str] = field(default_factory=list)
 
     # Analytical / Materials Database metadata
     material_id: str = ""
@@ -132,6 +134,10 @@ class Paper:
                 return "N"
             return "Pending"
 
+        v_sources = self.verified_sources
+        if not v_sources and self.verification_source:
+            v_sources = [s.strip() for s in self.verification_source.split(",") if s.strip()]
+
         return {
             # Section 5 exact requested columns
             "Title": self.title,
@@ -145,6 +151,7 @@ class Paper:
             "IEEE Indexed (Y/N)": bool_to_yn(self.ieee_indexed),
             "OpenAccess (Y/N)": bool_to_yn(self.open_access),
             "Verification Source": self.verification_source or "OpenAlex Fallback",
+            "Verified Sources": json.dumps(v_sources),
 
             # Materials Database detailed columns
             "Material ID": self.material_id,

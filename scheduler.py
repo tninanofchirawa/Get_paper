@@ -15,11 +15,12 @@ from typing import Dict, Any, Optional
 from config import cfg
 from database import db
 from email_service import email_dispatcher, imap_reader, parse_run_config_tags
-from cache_cleaner import purge_stale_cache
+from services.cache.cleaner import purge_stale_cache, purge_nightly_cache
 from harvester.pipeline import AsyncHarvestingPipeline
 from verifier.dual_branch import DualBranchVerifier
 from analyzer import PaperAnalyzer
 from excel_builder import StandardizedExcelBuilder
+from csv_builder import StandardizedCsvBuilder
 from drive_sync import drive_client
 from batch_runner import ResilientBatchRunner
 
@@ -100,9 +101,11 @@ async def execute_email_triggered_pipeline(run_config: Dict[str, Any], sender_em
             total_raw += metrics.get("raw_scraped", 0)
             total_dups += metrics.get("duplicates_removed", 0)
 
-        # Dual-branch verification
+        # Multi-source academic verification
         print(f"🔍 [Verification] Verifying {len(all_harvested_papers)} candidate papers...")
-        verified_papers = verifier.verify_batch(all_harvested_papers)
+        only_indexed = run_config.get("only_indexed", False)
+        verified_papers = verifier.verify_batch(all_harvested_papers, only_indexed=only_indexed)
+        excluded_count = getattr(verifier, "last_excluded_count", 0)
 
         # Taxonomy enrichment
         analyzed_papers = []
@@ -110,16 +113,17 @@ async def execute_email_triggered_pipeline(run_config: Dict[str, Any], sender_em
             ap = PaperAnalyzer.analyze_paper(p, query=run_config.get("main_topic", topics[0]), material_idx=idx)
             analyzed_papers.append(ap)
 
-        # Standardized Excel build
-        out_file = os.path.join(cfg.OUTPUT_DIR, f"{run_name}.xlsx")
+        # Standardized UTF-8 CSV build
+        out_file = os.path.join(cfg.OUTPUT_DIR, f"{run_name}.csv")
         final_metrics = {
             "raw_scraped": total_raw,
             "duplicates_removed": total_dups,
             "verified_retained": len(analyzed_papers),
+            "excluded_non_indexed": excluded_count,
             "duration_seconds": int(time.time() - start_time)
         }
 
-        StandardizedExcelBuilder.generate_workbook(
+        StandardizedCsvBuilder.generate_csv(
             papers=analyzed_papers,
             run_config=run_config,
             metrics=final_metrics,
@@ -127,7 +131,9 @@ async def execute_email_triggered_pipeline(run_config: Dict[str, Any], sender_em
         )
 
         # Google Drive v3 sync
-        drive_id = drive_client.upload_file(out_file)
+        drive_id = drive_client.upload_file(out_file, custom_filename=f"{run_name}.csv")
+        drive_link = drive_client.get_last_link()
+        final_metrics["drive_link"] = drive_link
 
         # Log completion
         db.log_run_completion(
@@ -144,14 +150,19 @@ async def execute_email_triggered_pipeline(run_config: Dict[str, Any], sender_em
         # Mark daily run as completed
         db.mark_daily_run_completed()
 
-        # Send completion email to sender
-        email_dispatcher.send_run_completion_report(
-            run_config=run_config,
-            metrics=final_metrics,
-            excel_path=out_file,
-            papers=analyzed_papers,
-            recipient=sender_email
-        )
+        # Send completion email to sender with robust exception handling
+        try:
+            email_dispatcher.send_run_completion_report(
+                run_config=run_config,
+                metrics=final_metrics,
+                csv_path=out_file,
+                papers=analyzed_papers,
+                drive_link=drive_link,
+                drive_file_id=drive_id,
+                recipient=sender_email
+            )
+        except Exception as e:
+            print(f"⚠️ [Email Dispatch Warning] Could not deliver email report: {e}")
 
         # Self-cleaning cache purge immediately following completed run
         purge_stale_cache()
@@ -202,6 +213,7 @@ class ThreeTierScheduler:
             print(f"🌙 [Scheduler] Midnight rollover: New IST date {date_str}. Resetting daily_run_completed = False.")
             logger.info(f"[Scheduler] Midnight rollover: Resetting daily_run_completed = False for {date_str}.")
             db.reset_daily_state_for_midnight(date_str)
+            purge_nightly_cache()
 
         self.last_checked_date = date_str
 
