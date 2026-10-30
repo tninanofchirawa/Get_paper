@@ -153,10 +153,10 @@ class PipelineConfig:
             if keys:
                 return keys
         if service.lower() in ("semantic_scholar", "s2"):
-            primary = self.S2_API_KEY or self.SEMANTIC_SCHOLAR_API_KEY
-            return [primary] if primary else []
-        single_key = getattr(self, f"{service.upper()}_API_KEY", "")
-        return [single_key] if single_key else []
+            primary = os.getenv("S2_API_KEY") or os.getenv("SEMANTIC_SCHOLAR_API_KEY") or self.S2_API_KEY or self.SEMANTIC_SCHOLAR_API_KEY
+            return [primary.strip()] if primary and primary.strip() else []
+        single_key = os.getenv(f"{service.upper()}_API_KEY") or getattr(self, f"{service.upper()}_API_KEY", "")
+        return [single_key.strip()] if single_key and single_key.strip() else []
 
     def get_http_headers(self, service: str = "generic") -> Dict[str, str]:
         """Generates standard polite pool and API-specific headers."""

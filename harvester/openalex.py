@@ -15,7 +15,7 @@ class OpenAlexHarvester(BaseAsyncHarvester):
     """Harvests academic papers from OpenAlex with cursor-based deep pagination."""
 
     def __init__(self):
-        super().__init__("OpenAlex", rate_limit_per_second=cfg.OPENALEX_RATE_LIMIT)
+        super().__init__("OpenAlex", rate_limit_per_second=getattr(cfg, 'OPENALEX_RATE_LIMIT', 10))
         self.base_url = "https://api.openalex.org/works"
 
     @staticmethod
@@ -40,11 +40,21 @@ class OpenAlexHarvester(BaseAsyncHarvester):
         doc_filter: Optional[str] = None
     ) -> Tuple[List[Paper], Optional[str], bool]:
         cursor = page_token or "*"
+        
+        # FIX: Changed 'per_page' to 'per-page'
         params = {
             "search": query,
-            "per_page": min(page_size, 100),
+            "per-page": min(page_size, 100),
             "cursor": cursor
         }
+
+        # Explicitly add Authentication and Polite Pool params 
+        polite_email = getattr(cfg, "POLITE_EMAIL", None)
+        api_key = getattr(cfg, "OPENALEX_API_KEY", None)
+        if polite_email:
+            params["mailto"] = str(polite_email).strip()
+        if api_key:
+            params["api_key"] = str(api_key).strip()
 
         # Build OpenAlex filter string
         filters = []
@@ -68,7 +78,17 @@ class OpenAlexHarvester(BaseAsyncHarvester):
         if filters:
             params["filter"] = ",".join(filters)
 
-        data = await self.get_json(session, self.base_url, params=params)
+        # Include Polite Pool User-Agent headers
+        user_agent_email = polite_email or "unknown@example.com"
+        headers = {
+            "User-Agent": f"AcademicHarvester/4.0 (mailto:{user_agent_email})",
+            "Accept": "application/json"
+        }
+        if api_key:
+            headers["api_key"] = str(api_key).strip()
+
+        # Fetch data (passing both params and headers)
+        data = await self.get_json(session, self.base_url, params=params, headers=headers)
         if not data:
             return [], None, False
 

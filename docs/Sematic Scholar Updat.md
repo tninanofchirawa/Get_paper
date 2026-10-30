@@ -375,3 +375,200 @@ Update the methods in `services/academic/semantic_scholar.py` to fix the DOI rou
 ```
 
 _(Make sure to also move `self.limiter.acquire()` inside `_do_request()` within `search_papers` so title verification retries don't violate the 1 RPS limit either.)_
+
+To fix this permanently, the verifier needs to stop using synchronous `requests` and a separate token bucket.
+
+Right now, your pipeline has a fundamental architectural clash: **Code A (`SemanticScholarHarvester`)** is running an async event loop, while **Code B (`SemanticScholarClient`)** is running synchronous blocking calls (`requests.Session` + `time.sleep`) on the same process. When both run:
+
+1. Synchronous calls block the entire Python event loop, causing Code A to time out.
+2. Code B does not share `SemanticScholarHarvester._s2_serial_lock`, so requests from Harvester and Verifier fire concurrently, instantly triggering S2's strict 1 RPS 429 lockouts.
+3. The circuit breaker trips after 3 failures and permanently blocks all further verifications.
+
+---
+
+### The Clean Solution: Make the Verifier Native Async
+
+Replace `SemanticScholarClient` with an asynchronous version that shares the exact same session, serial lock, and rate limiter as Code A:
+
+```python
+# services/academic/semantic_scholar.py
+import asyncio
+import logging
+import time
+import urllib.parse
+from difflib import SequenceMatcher
+from typing import Optional, Dict, Any, List, Tuple
+import aiohttp
+
+from config import cfg
+from harvester.models import clean_matching_title, sanitize_doi
+from utils.circuit_breaker import CircuitBreaker
+from harvester.semantic_scholar import SemanticScholarHarvester
+
+logger = logging.getLogger("SemanticScholarClient")
+
+
+class SemanticScholarVerifier:
+    """
+    Asynchronous citation verifier for Semantic Scholar.
+    Reuses SemanticScholarHarvester's lock, rate pacing, and session.
+    """
+
+    BASE_URL = "https://api.semanticscholar.org/graph/v1"
+
+    def __init__(self, circuit_breaker: Optional[CircuitBreaker] = None):
+        self.circuit_breaker = circuit_breaker or CircuitBreaker("Semantic Scholar API", failure_threshold=5)
+        self.key_pool: List[str] = getattr(cfg, "get_key_pool", lambda s: [])("semantic_scholar")
+        self.current_key_idx: int = 0
+
+    def _get_api_key(self) -> str:
+        """Pulls the active key from key_pool or fallback environment variables."""
+        if self.key_pool:
+            return self.key_pool[self.current_key_idx % len(self.key_pool)].strip()
+        env_key = getattr(cfg, "S2_API_KEY", None) or getattr(cfg, "SEMANTIC_SCHOLAR_API_KEY", "") or ""
+        return str(env_key).strip()
+
+    def _rotate_key(self):
+        """Rotates key when hitting 429s or auth errors."""
+        if self.key_pool and len(self.key_pool) > 1:
+            self.current_key_idx = (self.current_key_idx + 1) % len(self.key_pool)
+            logger.info(f"[SemanticScholar] Rotated key to index: {self.current_key_idx}")
+
+    def _build_headers(self) -> Dict[str, str]:
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": getattr(cfg, "USER_AGENT", "AcademicPaperGetter/2.0"),
+        }
+        key = self._get_api_key()
+        if key:
+            headers["x-api-key"] = key
+        return headers
+
+    async def _safe_get(self, session: aiohttp.ClientSession, url: str, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Executes request through Harvester's class lock so Harvester and Verifier
+        NEVER execute simultaneously.
+        """
+        # Share the exact lock and timestamp from Code A
+        async with SemanticScholarHarvester._s2_serial_lock:
+            for attempt in range(1, 4):
+                # Pacing check (1.15s buffer)
+                elapsed = time.monotonic() - SemanticScholarHarvester._last_request_ts
+                if elapsed < SemanticScholarHarvester._MIN_INTERVAL:
+                    await asyncio.sleep(SemanticScholarHarvester._MIN_INTERVAL - elapsed)
+
+                try:
+                    SemanticScholarHarvester._last_request_ts = time.monotonic()
+                    async with session.get(
+                        url,
+                        params=params,
+                        headers=self._build_headers(),
+                        timeout=aiohttp.ClientTimeout(total=15)
+                    ) as resp:
+                        if resp.status == 200:
+                            self.circuit_breaker.record_success()
+                            return await resp.json()
+
+                        if resp.status == 404:
+                            # Not found in S2 index — normal, don't trip circuit breaker
+                            return None
+
+                        if resp.status == 429:
+                            self._rotate_key()
+                            cooldown = 2.5 * attempt
+                            logger.warning(f"[SemanticScholar] 429 encountered, cooling down for {cooldown}s...")
+                            await asyncio.sleep(cooldown)
+                            continue
+
+                        if resp.status in (401, 403):
+                            self._rotate_key()
+                            return None
+
+                except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                    logger.warning(f"[SemanticScholar] Network issue on attempt {attempt}: {exc}")
+                    await asyncio.sleep(1.5)
+
+        return None
+
+    async def verify_doi(self, session: aiohttp.ClientSession, doi: str) -> Optional[Dict[str, Any]]:
+        """Verifies a single paper by DOI."""
+        if not doi or self.circuit_breaker.is_tripped():
+            return None
+
+        clean_doi = sanitize_doi(doi)
+        if not clean_doi:
+            return None
+
+        # Clean any preexisting 'doi:' or 'DOI:' prefix
+        if clean_doi.lower().startswith("doi:"):
+            clean_doi = clean_doi[4:].strip()
+
+        # Semantic Scholar requires 'DOI:<doi>' (keep slash unquoted for path resolution)
+        clean_encoded = urllib.parse.quote(clean_doi, safe="/")
+        url = f"{self.BASE_URL}/paper/DOI:{clean_encoded}"
+        params = {"fields": "title,venue,year,externalIds,openAccessPdf"}
+
+        data = await self._safe_get(session, url, params)
+        if not data:
+            return None
+
+        oa = data.get("openAccessPdf") or {}
+        return {
+            "confirmed": True,
+            "title": data.get("title", ""),
+            "venue": data.get("venue") or "",
+            "year": str(data.get("year") or ""),
+            "pdf_link": oa.get("url", ""),
+            "external_ids": data.get("externalIds", {})
+        }
+
+    async def verify_title(self, session: aiohttp.ClientSession, title: str) -> Optional[Dict[str, Any]]:
+        """Fallback verification by title fuzzy-matching."""
+        if not title or self.circuit_breaker.is_tripped():
+            return None
+
+        url = f"{self.BASE_URL}/paper/search"
+        params = {
+            "query": title,
+            "limit": 1,
+            "fields": "title,venue,year,externalIds,openAccessPdf"
+        }
+
+        data = await self._safe_get(session, url, params)
+        if not data:
+            return None
+
+        items = data.get("data") or []
+        if not items:
+            return None
+
+        match = items[0]
+        matched_title = match.get("title", "")
+
+        s1 = clean_matching_title(title)
+        s2 = clean_matching_title(matched_title)
+        if SequenceMatcher(None, s1, s2).ratio() < 0.65:
+            return None
+
+        oa = match.get("openAccessPdf") or {}
+        ext_ids = match.get("externalIds") or {}
+        return {
+            "confirmed": True,
+            "title": matched_title,
+            "venue": match.get("venue") or "",
+            "year": str(match.get("year") or ""),
+            "doi": sanitize_doi(ext_ids.get("DOI", "")),
+            "pdf_link": oa.get("url", ""),
+            "external_ids": ext_ids
+        }
+
+```
+
+---
+
+### Key Adjustments Made
+
+1. **Unified Lock (`SemanticScholarHarvester._s2_serial_lock`)**: The verifier and harvester now queue behind the exact same lock. They can never run simultaneously or fight for rate-limit quota.
+2. **True Async (`aiohttp`)**: Eliminates thread pool context switching, event loop freezes, and connection dropouts.
+3. **Safe DOI Pathing**: Cleans duplicate `doi:` prefixes while leaving the DOI path slash `/` safe from over-encoding (`safe="/"`), stopping the `404 Not Found` routing errors.
+4. **Isolated 404 Handling**: Unindexed papers return `None` silently without logging false errors or triggering the circuit breaker.

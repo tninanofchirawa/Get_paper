@@ -20,6 +20,7 @@ import logging
 
 from config import cfg
 from harvester.models import Paper
+from utils.retry_handlers import _parse_retry_after
 
 logger = logging.getLogger("HarvesterBase")
 
@@ -73,9 +74,22 @@ class BaseAsyncHarvester(ABC):
                 async with session.get(url, params=params, headers=req_headers, timeout=aiohttp.ClientTimeout(total=cfg.DEFAULT_TIMEOUT)) as response:
                     # Handle rate limiting explicitly
                     if response.status == 429:
-                        retry_after = response.headers.get("Retry-After")
-                        sleep_secs = float(retry_after) if (retry_after and retry_after.isdigit()) else (cfg.BACKOFF_FACTOR ** attempt)
-                        logger.warning(f"[{self.name}] Rate limit 429 encountered. Backing off for {sleep_secs:.1f}s (attempt {attempt}/{retries}).")
+                        server_delay = _parse_retry_after(response.headers.get("Retry-After"))
+                        if server_delay is not None:
+                            if server_delay > 120.0:
+                                logger.error(
+                                    f"[{self.name}] Daily quota or rate window exhausted "
+                                    f"(Retry-After: {server_delay:.0f}s > 120s). Aborting harvest requests."
+                                )
+                                return None
+                            sleep_secs = min(60.0, server_delay)
+                        else:
+                            sleep_secs = min(60.0, cfg.BACKOFF_FACTOR ** attempt)
+
+                        logger.warning(
+                            f"[{self.name}] Rate limit 429 encountered. Backing off for {sleep_secs:.1f}s "
+                            f"(attempt {attempt}/{retries})."
+                        )
                         await asyncio.sleep(sleep_secs)
                         continue
 

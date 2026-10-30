@@ -10,8 +10,9 @@ from unittest.mock import patch, MagicMock
 
 from config import cfg
 from utils.rate_limiters import TokenBucketRateLimiter
-from utils.retry_handlers import execute_with_429_retry
+from utils.retry_handlers import execute_with_429_retry, _parse_retry_after
 from services.academic.semantic_scholar import SemanticScholarClient
+from services.academic.openalex import OpenAlexClient
 from services.cache.cleaner import purge_nightly_cache
 from services.drive.quota import validate_upload_quota_preconditions
 from services.drive.mime import get_mime_and_stream
@@ -62,6 +63,93 @@ class TestRateLimiterAndS2Client(unittest.TestCase):
         self.assertEqual(call_count, 3)
         self.assertIsNotNone(resp)
         self.assertEqual(resp.status_code, 200)
+
+    def test_parse_retry_after_epoch_and_delta(self):
+        """Verifies _parse_retry_after handles delta seconds, epoch timestamps, and date strings."""
+        # 1. Delta seconds
+        self.assertEqual(_parse_retry_after("15"), 15.0)
+        self.assertEqual(_parse_retry_after("2.5"), 2.5)
+
+        # 2. Unix epoch timestamp > 1e9
+        now = time.time()
+        future_epoch = str(now + 42.0)
+        parsed_delay = _parse_retry_after(future_epoch)
+        self.assertIsNotNone(parsed_delay)
+        self.assertAlmostEqual(parsed_delay, 42.0, delta=2.0)
+
+        # 3. None / empty / invalid
+        self.assertIsNone(_parse_retry_after(None))
+        self.assertIsNone(_parse_retry_after(""))
+        self.assertIsNone(_parse_retry_after("invalid_header"))
+
+    def test_quota_exhaustion_aborts_immediately(self):
+        """Verifies execute_with_429_retry aborts when Retry-After indicates daily quota exhaustion (>120s)."""
+        call_count = 0
+
+        def mock_exhausted_request():
+            nonlocal call_count
+            call_count += 1
+            resp = MagicMock()
+            resp.status_code = 429
+            # OpenAlex quota reset indicator (~6 hours)
+            resp.headers = {"Retry-After": "21783"}
+            return resp
+
+        resp = execute_with_429_retry(
+            request_fn=mock_exhausted_request,
+            max_retries=4,
+            initial_backoff=0.01,
+            service_name="TestOpenAlexQuota"
+        )
+        # Should abort immediately after attempt 1 rather than sleeping 4 times!
+        self.assertEqual(call_count, 1)
+        self.assertIsNotNone(resp)
+        self.assertEqual(resp.status_code, 429)
+
+    def test_s2_key_pool_rotation_on_429(self):
+        """Verifies SemanticScholarClient rotates through key pool when 429 is encountered."""
+        client = SemanticScholarClient()
+        client.key_pool = ["key_alpha", "key_beta", "key_gamma"]
+        client.current_key_idx = 0
+
+        mock_resp_429 = MagicMock()
+        mock_resp_429.status_code = 429
+
+        client._handle_retry_callback(mock_resp_429, 0)
+        self.assertEqual(client._get_api_key(), "key_beta")
+
+        client._handle_retry_callback(mock_resp_429, 1)
+        self.assertEqual(client._get_api_key(), "key_gamma")
+
+        client._handle_retry_callback(mock_resp_429, 2)
+        self.assertEqual(client._get_api_key(), "key_alpha")
+
+    def test_openalex_client_verify_doi_sanitization(self):
+        """Verifies OpenAlexClient correctly sanitizes DOIs with various prefixes."""
+        client = OpenAlexClient()
+        with patch.object(client.session, "get") as mock_get:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {
+                "title": "Clean Title",
+                "primary_location": {"source": {"display_name": "Nature"}},
+                "open_access": {"is_oa": True, "oa_url": "https://example.com/oa.pdf"}
+            }
+            mock_get.return_value = mock_resp
+
+            # Case A: with 'doi:' prefix
+            res1 = client.verify_doi("doi:10.1038/nature12345")
+            self.assertIsNotNone(res1)
+            self.assertEqual(res1["doi"], "10.1038/nature12345")
+            # Verify URL constructed without duplicate 'doi:'
+            called_url = mock_get.call_args[0][0]
+            self.assertIn("https://doi.org/10.1038/nature12345", called_url)
+            self.assertNotIn("doi:10", called_url)
+
+            # Case B: with 'https://doi.org/' prefix
+            res2 = client.verify_doi("https://doi.org/10.1038/nature12345")
+            self.assertIsNotNone(res2)
+            self.assertEqual(res2["doi"], "10.1038/nature12345")
 
 
 class TestNightlyCachePurging(unittest.TestCase):

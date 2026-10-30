@@ -6,11 +6,10 @@ Requirements:
 - Strict rate limit of 1 request per second (cumulative across all endpoints) with 1.05s safety buffer.
 - Exponential backoff retry handler catching HTTP 429 (Too Many Requests).
 - Outbound headers must include 'x-api-key': os.getenv('S2_API_KEY') on every outbound request.
-- Token pooling and rotation when multiple keys are provided.
+- Token pooling and rotation when multiple keys are provided via on_retry_callback.
 """
 
 import os
-import time
 import urllib.parse
 import logging
 from typing import Optional, Dict, Any, List, Tuple
@@ -18,23 +17,21 @@ from difflib import SequenceMatcher
 import requests
 
 from config import cfg
-from utils.rate_limiters import TokenBucketRateLimiter, GLOBAL_SEMANTIC_SCHOLAR_LIMITER
+from utils.rate_limiters import GLOBAL_SEMANTIC_SCHOLAR_LIMITER
 from utils.retry_handlers import execute_with_429_retry
 from utils.circuit_breaker import CircuitBreaker
 from harvester.models import clean_matching_title, sanitize_doi
 
 logger = logging.getLogger("SemanticScholarClient")
 
-# Global singleton rate limiter across all Semantic Scholar endpoints:
-# Strict 1 request per second with 0.05s safety buffer (1.05s total interval)
 _S2_RATE_LIMITER = GLOBAL_SEMANTIC_SCHOLAR_LIMITER
 
 
 class SemanticScholarClient:
     """
     Client for Semantic Scholar Graph API.
-    Enforces strict 1 req/sec pacing, HTTP 429 exponential backoff,
-    and mandatory 'x-api-key' header forwarding with token rotation.
+    Enforces strict 1 req/sec pacing, HTTP 429 exponential backoff with key rotation callbacks,
+    and mandatory 'x-api-key' header forwarding.
     """
 
     BASE_URL = "https://api.semanticscholar.org/graph/v1"
@@ -43,34 +40,49 @@ class SemanticScholarClient:
         self.circuit_breaker = circuit_breaker or CircuitBreaker("Semantic Scholar API", failure_threshold=3)
         self.session = requests.Session()
         self.limiter = _S2_RATE_LIMITER
-        self.key_pool: List[str] = cfg.get_key_pool("semantic_scholar")
+        self.key_pool: List[str] = getattr(cfg, "get_key_pool", lambda service: [])("semantic_scholar")
         self.current_key_idx: int = 0
         self.last_status_code: Optional[int] = None
         self.on_429_callback: Optional[Any] = None
 
     def _get_api_key(self) -> str:
         """Retrieves active S2 API key from key pool first, falling back to env/config."""
-        if self.key_pool:
+        if self.key_pool and len(self.key_pool) > 1:
             return self.key_pool[self.current_key_idx % len(self.key_pool)].strip()
         
         env_key = (
             os.getenv("S2_API_KEY") 
+            or (self.key_pool[0] if self.key_pool else "")
             or getattr(cfg, "S2_API_KEY", None) 
             or getattr(cfg, "SEMANTIC_SCHOLAR_API_KEY", None) 
             or ""
         )
         return env_key.strip()
 
-    def _rotate_key(self):
+    def _rotate_key(self) -> None:
         """Rotates to next key in pool upon receiving rate limit or auth response."""
         if self.key_pool and len(self.key_pool) > 1:
             self.current_key_idx = (self.current_key_idx + 1) % len(self.key_pool)
             logger.info(f"[SemanticScholar] Rotated API key (active index: {self.current_key_idx})")
 
+    def _handle_retry_callback(self, resp: requests.Response, attempt: int) -> None:
+        """
+        Callback passed to execute_with_429_retry.
+        Fires on HTTP 429 or auth errors to rotate credentials before the next attempt.
+        """
+        if resp.status_code in (429, 401, 403):
+            self._rotate_key()
+
+        if resp.status_code == 429 and self.on_429_callback:
+            try:
+                self.on_429_callback()
+            except Exception as e:
+                logger.warning(f"[SemanticScholar] on_429_callback raised an exception: {e}")
+
     def get_headers(self) -> Dict[str, str]:
-        """Builds outbound headers, strictly enforcing 'x-api-key' when available."""
+        """Builds outbound headers, forwarding 'x-api-key' dynamically from the rotated pool."""
         headers = {
-            "User-Agent": cfg.USER_AGENT,
+            "User-Agent": getattr(cfg, "USER_AGENT", "AcademicHarvester/4.0"),
             "Accept": "application/json",
         }
         api_key = self._get_api_key()
@@ -90,23 +102,26 @@ class SemanticScholarClient:
         if not clean_doi:
             return None
 
-        # Prefix with DOI: and encode with safe='' to avoid route path fragmentation
-        encoded_id = f"DOI:{urllib.parse.quote(clean_doi, safe='')}"
+        # Keep forward slashes unencoded so path-based DOI routing resolves correctly
+        encoded_id = f"DOI:{urllib.parse.quote(clean_doi, safe='/')}"
         url = f"{self.BASE_URL}/paper/{encoded_id}"
         params = {"fields": "title,venue,year,externalIds,openAccessPdf"}
 
-        def _do_request():
-            # Paced inside the execution block so retries observe the 1 RPS limit
+        def _do_request() -> requests.Response:
             self.limiter.acquire()
             headers = self.get_headers()
-            return self.session.get(url, params=params, headers=headers, timeout=cfg.DEFAULT_TIMEOUT)
+            return self.session.get(url, params=params, headers=headers, timeout=getattr(cfg, "DEFAULT_TIMEOUT", 10))
 
         try:
+            # Scale retries up to key pool size if multiple keys are available
+            max_retries = max(getattr(cfg, "MAX_RETRIES", 3), len(self.key_pool))
+
             resp = execute_with_429_retry(
                 request_fn=_do_request,
-                max_retries=cfg.MAX_RETRIES,
+                max_retries=max_retries,
                 initial_backoff=2.0,
-                service_name="Semantic Scholar"
+                service_name="Semantic Scholar",
+                on_retry_callback=self._handle_retry_callback
             )
 
             if resp is None:
@@ -130,19 +145,11 @@ class SemanticScholarClient:
                     "external_ids": data.get("externalIds", {})
                 }
             elif resp.status_code == 404:
-                # 404 indicates the paper is unindexed in S2, not an infrastructure failure
                 return None
             elif resp.status_code == 429:
-                self._rotate_key()
-                if self.on_429_callback:
-                    try:
-                        self.on_429_callback()
-                    except Exception:
-                        pass
-                self.circuit_breaker.record_failure(429, "Rate limited")
+                self.circuit_breaker.record_failure(429, "Rate limited across all keys")
                 return None
             elif resp.status_code in (401, 403):
-                self._rotate_key()
                 self.circuit_breaker.record_failure(resp.status_code, resp.text[:100])
                 return None
 
@@ -161,7 +168,7 @@ class SemanticScholarClient:
         year_range: Optional[str] = None
     ) -> Tuple[List[Dict[str, Any]], int, bool]:
         """
-        Searches Semantic Scholar with pagination parameters.
+        Searches Semantic Scholar with pagination parameters and automatic key rotation on 429.
         Returns: (paper_records, total_count, has_more)
         """
         if self.circuit_breaker.is_tripped() or not query:
@@ -183,18 +190,20 @@ class SemanticScholarClient:
             elif len(parts) == 1:
                 params["year"] = parts[0]
 
-        def _do_request():
-            # Paced inside retry closure so automatic backoffs do not bypass rate limits
+        def _do_request() -> requests.Response:
             self.limiter.acquire()
             headers = self.get_headers()
-            return self.session.get(url, params=params, headers=headers, timeout=cfg.DEFAULT_TIMEOUT)
+            return self.session.get(url, params=params, headers=headers, timeout=getattr(cfg, "DEFAULT_TIMEOUT", 10))
 
         try:
+            max_retries = max(getattr(cfg, "MAX_RETRIES", 3), len(self.key_pool))
+
             resp = execute_with_429_retry(
                 request_fn=_do_request,
-                max_retries=cfg.MAX_RETRIES,
+                max_retries=max_retries,
                 initial_backoff=2.0,
-                service_name="Semantic Scholar Search"
+                service_name="Semantic Scholar Search",
+                on_retry_callback=self._handle_retry_callback
             )
 
             if resp is None:
@@ -212,11 +221,9 @@ class SemanticScholarClient:
                 has_more = (offset + len(items)) < total and len(items) > 0
                 return items, total, has_more
             elif resp.status_code == 429:
-                self._rotate_key()
-                self.circuit_breaker.record_failure(429, "Search rate limited")
+                self.circuit_breaker.record_failure(429, "Search rate limited across all keys")
                 return [], 0, False
             elif resp.status_code in (401, 403):
-                self._rotate_key()
                 self.circuit_breaker.record_failure(resp.status_code, resp.text[:100])
                 return [], 0, False
 
